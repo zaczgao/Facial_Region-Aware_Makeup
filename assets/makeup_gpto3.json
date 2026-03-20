@@ -1,0 +1,232 @@
+{
+  "Natural": [
+    {
+      "name": "Dewy Minimalist",
+      "description": "Sheer tinted moisturizer evens tone, cream blush melts into cheeks, brushed-up brows frame softly curled lashes, clear balm glosses lips, leaving skin luminous, healthy, utterly breathable and effortless."
+    },
+    {
+      "name": "Sun-kissed No-Makeup",
+      "description": "Lightweight gel bronzer warms perimeter, freckles dotted across nose, peach stain kisses cheeks, fluffy mascara defines subtly, lip oil adds juicy sheen, creating believable beach holiday radiance."
+    },
+    {
+      "name": "Fresh-Faced Glow",
+      "description": "Hydrating primer plumps skin, pastel pink cream highlighter taps onto high points, neutral satin shadow brightens lids, feathery brows, tint balm, delivering innocent lit-from-within freshness ideal for everyday."
+    }
+  ],
+  "Dramatic": [
+    {
+      "name": "Smoky Seductress",
+      "description": "Charcoal and espresso shadows blended past crease, lower lashline smudged, waterline kohl intense, sculpted contour chisels cheeks, vampy burgundy lips, strategic strobing sparks temples, creating unforgettable smoldering evening presence."
+    },
+    {
+      "name": "Graphic Wing",
+      "description": "Matte white lid sets stage for razor-sharp jet-black wing that extends toward temple then double-lines into crease, cheeks softly bronzed, nude velvet lips keep spotlight on architectural eye artwork."
+    },
+    {
+      "name": "High-Voltage Glam",
+      "description": "Electric fuchsia glitter smoked over lids, holographic foiled highlight beams cheekbones, mega flutter false lashes, crystalline rhinestones trace brow bone, metallic magenta lip lacquer finishes fearless runway-worthy statement."
+    }
+  ],
+  "Cultural": [
+    {
+      "name": "Geisha-Inspired Elegance",
+      "description": "Porcelain white base perfected, soft crimson gradient covers inner lips, charcoal defines upper lash line, blush drapes from temples inward, delicate hand-painted sakura petal accents grace cheekbone for refined artistry."
+    },
+    {
+      "name": "Bollywood Bridal",
+      "description": "Rich gold shimmer washes eyelids, emerald kajal rims eyes, fluttery lashes flourish, cheeks warmed with terracotta, bindi placed precisely, glossy cherry lips complete opulent, dance-ready look reflecting Indian wedding splendour."
+    },
+    {
+      "name": "Día de los Muertos Calavera",
+      "description": "White skeletal base, black hollows contour eyes and nose, vibrant marigold, turquoise and fuchsia filigree patterns bloom outward, rhinestone petals frame sockets, crimson rose painted chin honors ancestral celebration."
+    },
+    {
+      "name": "Maasai Tribal Vibrance",
+      "description": "Earthy red ochre foundation applied thinly, white dots symmetrically adorn brow ridge and cheekbones, cobalt vertical stripe down nose, matte dark berry lip, evoking traditional Kenyan warrior ceremonial aesthetics."
+    }
+  ],
+  "Seasonal": [
+    {
+      "name": "Spring Blossom",
+      "description": "Pastel lavender and mint shadows softly blended, rosy baby cheeks, fluffy brushed brows, glossy petal-pink lips, dewy skin sprinkled with tiny hand-drawn flower clusters, embodying garden awakening sweetness."
+    },
+    {
+      "name": "Summer Neon Splash",
+      "description": "Hot lime graphic liner cuts across bronze lids, fluorescent coral cheeks, golden body shimmer, waterproof spiky lashes, watermelon gloss amplifies pout, projecting carefree pool-party energy under blazing sunshine."
+    },
+    {
+      "name": "Autumn Spice",
+      "description": "Burnt orange matte shadow halos eyes, cinnamon smoked lower lashline, copper foil pop center lid, soft brown lip stain, freckled complexion, giving cozy sweater-weather vibe reminiscent pumpkin latte."
+    },
+    {
+      "name": "Winter Frost Queen",
+      "description": "Icy silver pigment blankets lids to brow, opalescent glitter snowflakes placed at outer corners, cheeks highlighted with cool pearl, matte mauve lips, overall crystalline look echoing silent frosted landscapes."
+    }
+  ],
+  "Celebrity-Inspired": [
+    {
+      "name": "Classic Marilyn",
+      "description": "Porcelain matte complexion, diffused sculpting, champagne shimmer lids, dramatic half-lash, inky kitten flick, bold blue-based red overdrawn lips, beauty mark dotted precisely, radiating timeless Hollywood bombshell confidence."
+    },
+    {
+      "name": "Rihanna Red Carpet",
+      "description": "Soft matte foundation, hyper-real contour, gilded green smokey eyes, fluttery 3D lashes, buff nude glossy lips, diamanté highlight spanning collarbones, delivering fearless, sultry, effortlessly cool Fenty-inspired statement."
+    },
+    {
+      "name": "Euphoria Zendaya",
+      "description": "Translucent gel skin, lilac and turquoise cloudlike eyeshadow blended to brows, scattered flatback crystals around orbital, lavender mascara, holographic lavender gloss, creating dreamy, experimental Gen-Z moodboard reminiscent HBO series."
+    },
+    {
+      "name": "Twiggy Mod",
+      "description": "Pale matte base, taupe crease cut high, white lid, exaggerated painted-on lower lashes, chunky black top lashes, subtle peach lip, delivering swinging sixties London youthquake energy."
+    }
+  ],
+  "Fantasy": [
+    {
+      "name": "Mermaid Siren",
+      "description": "Aqua and teal metallic scales stenciled along temples, iridescent pigments glaze lids, pearls adhered on brow, holographic green lip topper, wet-look highlighter mimics seawater sheen under moonlight."
+    },
+    {
+      "name": "Forest Elf",
+      "description": "Olive cream contour carves angular ears illusion, mossy shimmer washes eyelids, gold leaf freckles scatter nose, pressed fern imprint across cheek, cocoa balm, emanating mystical woodland guardian aura."
+    },
+    {
+      "name": "Galactic Alien",
+      "description": "Chrome purple base covers entire face, high points airbrushed with lime duochrome, black negative-space lip, white holographic liner creates constellations around eyes, giving otherworldly cosmic traveler appearance."
+    },
+    {
+      "name": "Fire Phoenix",
+      "description": "Gradient sunset reds, oranges, and golds wing dramatically past brows, feather strokes painted outward, glitter embers dust under eyes, metallic crimson lips, incandescent highlighter for reborn mythical bird flair."
+    }
+  ],
+  "Artistic": [
+    {
+      "name": "Pop Art Comic",
+      "description": "Matte complexion becomes canvas, bold black outlines trace exaggerated features, dotted Ben-Day patterns fill cheeks, electric primary colors block eyelids and lips, capturing Roy Lichtenstein graphic storytelling aesthetic."
+    },
+    {
+      "name": "Watercolor Wash",
+      "description": "Pastel pigments diluted with mixing medium sweep fluidly over face, soft edges bleed like paint on paper, translucent layers overlap, ethereal glossy highlight and clear lashes mirror fresh artwork."
+    },
+    {
+      "name": "Cubist Abstract",
+      "description": "Angles of tri-tone foundation in beige, olive, terracotta sculpt planes, mismatched geometric shapes painted around eyes and lips, black graphic lines segment features, producing Picasso-influenced fragmented perspective."
+    },
+    {
+      "name": "Neon Drip",
+      "description": "Fluorescent pigments poured along creases then allowed to drip down cheeks like wet paint, matte skin for contrast, UV-reactive liner rims eyes, clear gloss lip underscores edgy installation vibe."
+    }
+  ],
+  "Historical": [
+    {
+      "name": "Victorian Porcelain",
+      "description": "Full-coverage alabaster foundation, softly rouged apples, delicately arched natural brows, tightlined lashes with cake mascara, rosebud lips created using darker edges and bitten center, embodying demure 19th-century societal propriety."
+    },
+    {
+      "name": "Roaring Twenties Flapper",
+      "description": "Thin penciled brows, smoky kohl eyes rounded downward, glittering champagne on lids, heavy mascara clumps lashes, Cupid’s bow sharply defined with vampy oxblood lipstick, producing rebellious Jazz Age glamour."
+    },
+    {
+      "name": "Ancient Egyptian Royal",
+      "description": "Matte bronze complexion, eyebrows extended into long straight line, thick cobalt lapis liner wings to temples, gold foil on lids, terracotta stained lips, embodying divine power of Nefertiti."
+    },
+    {
+      "name": "18th Century Rococo",
+      "description": "Pale rice powder base, bright pink circles of rouge high on cheeks, silk-finish white eyelashes, tiny black velvet heart patch near lip, cherry stain, channeling Versailles court opulence."
+    }
+  ],
+  "Theatrical": [
+    {
+      "name": "Clown Pierrot",
+      "description": "Stark white greasepaint base, exaggerated teardrop eyes in black, sad red mouth painted small and downturned, single blue diamond on forehead, giving melancholic mime aesthetic suitable for ballet stage."
+    },
+    {
+      "name": "Greek Tragedy Mask",
+      "description": "Matte bone-colored foundation, heavy black liner shapes exaggerated cat eyes, crimson lip extended to cheeks forming mask smile, foreheads shaded deeply, gold leaf on temples, projecting ancient amphitheatre intensity."
+    },
+    {
+      "name": "Kabuki Warrior",
+      "description": "White rice powder base dominates, bold scarlet and black angular lines carve across cheeks and eyes, brows blocked, crimson lips, emphasizing strength and supernatural aura of traditional Japanese theatre."
+    },
+    {
+      "name": "Pantomime Dame",
+      "description": "Glowing pink cheeks exaggerated to temples, oversized expressive brows, glitter shadow, heavily lined eyes, cherry clown smile stretched wide, powdered décolletage, delivering campy comedic character beloved in British holiday productions."
+    }
+  ],
+  "Gothic": [
+    {
+      "name": "Romantic Victorian Goth",
+      "description": "Translucent ivory foundation, hollows shaded with cool greys, soot-black smudged eyes, lace-inspired eyeliner flicks, matte dried-blood lips, subtle silver highlight, achieving melancholic elegance echoing crumbling candlelit mansions."
+    },
+    {
+      "name": "Cyber Goth Rave",
+      "description": "Neon green contour, UV-reactive blacklight stripes across cheeks, sharp black vinyl lipstick, spidery false lashes, metallic chrome brows, overall industrial futurepunk darkness ready for subterranean warehouse dance floor."
+    },
+    {
+      "name": "Vampiric Aristocrat",
+      "description": "Porcelain matte base, dramatic hollow contour, burgundy-black gradient lip revealing subtle fangs, blood-red inner corner eye wash, glossy highlight only on high nose bridge, channeling eternal decadent predator."
+    }
+  ],
+  "Festival": [
+    {
+      "name": "Coachella Boho",
+      "description": "Sun-drenched bronzer, rose-gold shimmer lids, white freckle dots across nose, turquoise glitter tears, face gems along brows, coral gloss, providing laid-back desert festival sparkle perfect under flower crowns."
+    },
+    {
+      "name": "Carnival Samba",
+      "description": "Vibrant rainbow cut-crease eyes, feather lash extensions, gold body paint highlighter, ruby glitter lips, rhinestones tracing cheekbones, energetic makeup pulsates with Brazilian drums along Rio parade route."
+    },
+    {
+      "name": "Holi Color Burst",
+      "description": "Matte skin purposely minimal, allowing explosive powders of fuchsia, saffron, teal loosely splattered across face, neon liner peeking through, glossy balm, embodying joyful chaos of Indian festival of colors."
+    }
+  ],
+  "Bridal": [
+    {
+      "name": "Classic Western Bride",
+      "description": "Airbrushed satin foundation, champagne shimmer inner corners, wispy lashes, soft sculpt, ballerina blush, creamy rose lipstick kissed with gloss, delivering timeless, camera-ready radiance that endures sentimental photographs."
+    },
+    {
+      "name": "South Asian Bride",
+      "description": "Full-coverage luminous base, burgundy and gold halo eyes, thick winged kajal, bold 3D lashes, scarlet matte lips, strategic highlighter, meant to complement heavy jewelry and richly embroidered lehenga."
+    },
+    {
+      "name": "Bohemian Elopement",
+      "description": "Lightweight tinted serum evens, freckles embraced, terra-cotta wash on lids and cheeks, creamy nude lip, subtle gold leaf accents near temples, conveying carefree outdoor vows under setting sun."
+    }
+  ],
+  "Cyberpunk": [
+    {
+      "name": "Neon Circuitry",
+      "description": "Matte grey base, chrome cheek panels, lime and cyan lines mimic motherboard traces across temples, ultraviolet eyeliner, black ombré lips, reflective highlighter, projecting dystopian tech metropolis vibe."
+    },
+    {
+      "name": "Hologram Hacker",
+      "description": "Oil-slick multichrome shadow spans brow to cheekbone, digital numbers stamped under eye, glitchy pixel lips created with alternating matte black and foil silver, luminous strobe ignites binary rebel persona."
+    },
+    {
+      "name": "Synthwave Sunset",
+      "description": "Magenta-to-orange gradient liner mirrors retro horizon, indigo blush swept onto temples, grid pattern highlighted on cheek using violet lasers, glossy electric pink lips, celebrating 80s futuristic nostalgia aesthetic."
+    }
+  ],
+  "Kawaii": [
+    {
+      "name": "Pastel Fairy Kei",
+      "description": "Cotton-candy pink foundation, baby blue blush high under eyes, white eyeliner widens gaze, star sequins on cheeks, ombré lavender gloss, crafting sugary sweet doll-like cuteness emblematic of Tokyo street style."
+    },
+    {
+      "name": "Magical Girl Sparkle",
+      "description": "Glittery doe eyes with exaggerated lower lashes, heart-shaped blush on apples, iridescent highlighter, glossy coral lips, tiny moon decals near temples, radiating anime heroine optimism ready for transformation sequence."
+    },
+    {
+      "name": "Harajuku Lolita",
+      "description": "Flawless porcelain base, strawberry blush across nose, oversized circle lenses enhanced by thick black top lashes and lower lash clusters, bow-shaped cherry lips, delicate lace sticker under eye."
+    }
+  ],
+  "Avant-Garde": [
+    {
+      "name": "Monochrome Negative Space",
+      "description": "Entire face airbrushed matte white, strategic jet-black blocks around eyes and mouth leave crisp unused gaps, brows erased, lashes painted white, producing high-contrast editorial look defying conventional facial mapping."
+    }
+  ]
+}
