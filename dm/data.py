@@ -143,7 +143,7 @@ def random_crop_arr(pil_image, image_size, min_crop_frac=0.8, max_crop_frac=1.0,
 class MakeupDataset(Dataset):
     def __init__(self, data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, use_3d):
+                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, geo_mode):
         self.data_root = data_root
         self.resolution = resolution
         self.random_crop = not center_crop
@@ -161,7 +161,7 @@ class MakeupDataset(Dataset):
         self.drop_all_rate = drop_cond_rate[2]
         self.skip_background = skip_background
         self.num_parts = num_parts
-        self.use_3d = use_3d
+        self.geo_mode = geo_mode
 
         self.label_names = ['background', 'face', 'rb', 'lb', 're', 'le', 'nose', 'ulip', 'imouth', 'llip', 'hair']
         self.label_group = [
@@ -333,9 +333,9 @@ class MakeupDataset(Dataset):
         if data_folder == "id":
             data_folder = ""
 
-        if self.use_3d:
+        if self.geo_mode == "3d":
             pose_path = os.path.join(data_root, "3d", data_folder, "{}.png".format(data_file_name))
-        else:
+        elif self.geo_mode == "keypoint":
             pose_path = os.path.join(data_root, "pose", data_folder, "{}.png".format(data_file_name))
         img_pose_pil = PIL.Image.open(pose_path).convert("RGB")
         assert img_id_pil.size == img_pose_pil.size
@@ -451,10 +451,10 @@ def collate_fn(examples):
 class SyntheticDataset(MakeupDataset):
     def __init__(self, data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, use_3d):
+                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, geo_mode):
         super().__init__(data_root, data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, use_3d)
+                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, geo_mode)
 
         self.image = PIL.Image.new('RGB', (self.resolution, self.resolution))
         self.dataset_size = 100
@@ -533,7 +533,7 @@ if __name__ == '__main__':
     dataset = MakeupDataset(data_dir, 512, center_crop=False, random_flip=True,
                             tokenizer=tokenizer, base_prompt=base_prompt, use_templates=True, vector_shuffle=True, drop_tokens=False, drop_tokens_rate=0.,
                             swap_pair_rate=0.1, drop_cond_rate=[0.05, 0.05, 0.05],
-                            skip_background=True, num_parts=num_parts, use_3d=False)
+                            skip_background=True, num_parts=num_parts, geo_mode="3d")
 
     img = PIL.Image.open("./assets/images/00128-img_swap.png")
     img_style = dataset.deform(image=np.array(img))

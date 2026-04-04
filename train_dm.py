@@ -145,9 +145,9 @@ def log_validation(
             img_makeup = load_image(img_makeup_path)
 
             img_id_name = os.path.splitext(os.path.basename(img_id_path))[0]
-            if args.use_3d:
+            if args.geo_mode == "3d":
                 img_pose_path = os.path.join(args.val_data_root, "3d", "{}.png".format(img_id_name))
-            else:
+            elif args.geo_mode == "keypoint":
                 img_pose_path = os.path.join(args.val_data_root, "pose", "{}.png".format(img_id_name))
             img_pose = load_image(img_pose_path)
 
@@ -501,7 +501,7 @@ def parse_args():
     parser.add_argument("--use_lora", type=int, default=0, help="Use lora for sd backbone")
     parser.add_argument("--use_ipa", type=int, default=0, help="Use ipa for makeup style")
     parser.add_argument("--use_text_inv", type=int, default=0, help="Use text inversion for makeup style")
-    parser.add_argument("--use_3d", type=int, default=0, help="Use 3d")
+    parser.add_argument("--geo_mode", type=str, default="3d", choices=["3d", "normal", "keypoint"])
     # parser.add_argument("--num_tokens", type=int, default=16, help="Number of tokens to query from the CLIP image encoding.")
     parser.add_argument("--lr_adapter", type=float, default=1e-4)
     parser.add_argument("--weight_attn", type=float, default=0.1)
@@ -788,7 +788,7 @@ def main():
     train_dataset = dataset_cls(args.train_data_dir, args.resolution, args.center_crop, args.random_flip,
                                 tokenizer, base_prompt, args.use_templates, args.vector_shuffle, args.drop_tokens, args.drop_tokens_rate,
                                 args.swap_pair_rate, [args.drop_text_rate, args.drop_style_rate, args.drop_all_rate],
-                                args.skip_background, args.num_parts, args.use_3d)
+                                args.skip_background, args.num_parts, args.geo_mode)
 
     def unwrap_model(model):
         model = accelerator.unwrap_model(model)

@@ -46,21 +46,9 @@ from utils.data_utils import OPENAI_API_KEY, get_makeup_list, get_img_context, \
     sample_flux, sample_flux2, sample_qwen_t2i, sample_kontext, sample_qwen_edit, \
     sample_gpt_t2i, sample_gpt_edit, add_alpha, encode_pil_image, sample_gpt_text, \
     sample_gemini_text, \
-    merge_anno, create_split
+    merge_anno, create_data_split
 from utils.face_swap import FaceSwap_Wrapper, blend_image_mask
 from utils.vis_utils import show_result
-
-
-def get_celeb_list(data_path):
-    with open(data_path, "r", encoding="utf-8") as f:
-        celeb_info = json.load(f)
-
-    celeb_info_list = []
-    for category in celeb_info.keys():
-        for name in celeb_info[category]:
-            celeb_info_list.append([category, name])
-
-    return celeb_info_list
 
 
 def get_bbox_mask(bbox, height, width, thickness):
@@ -123,7 +111,7 @@ def create_makeup_pair(args, img_id_path_list):
         makeup_filter_offset = len(makeup_info) - len(makeup_info_subset)
         makeup_info = makeup_info_subset
 
-    # face_analyser = FaceAnalyser(det_thresh=0.5, min_h=500, min_w=500, align=False)
+    # face_analyser = FaceAnalyser(det_thresh=0.5, min_h=500, min_w=500, align=False, td_mode="")
     # face_parser = FaceParser()
 
     if args.edit_method == "openai":
@@ -135,9 +123,9 @@ def create_makeup_pair(args, img_id_path_list):
     elif args.edit_method == "qwenedit":
         pipe = init_qwen_edit()
 
-    makeup_dir = os.path.join(args.out_dir, args.name, "makeup")
+    makeup_dir = os.path.join(args.out_dir, "makeup")
     os.makedirs(makeup_dir, exist_ok=True)
-    mask_raw_dir = os.path.join(args.out_dir, args.name, "mask")
+    mask_raw_dir = os.path.join(args.out_dir, "mask")
     os.makedirs(mask_raw_dir, exist_ok=True)
 
     prompt_base = "Add makeup to the person while keeping the original identity, facial features, expression and hairstyle. The makeup is {} Maintain the original photographic quality, lighting, position, background, camera angle, framing, and perspective."
@@ -158,7 +146,7 @@ def create_makeup_pair(args, img_id_path_list):
 
         out_dir_img = os.path.join(makeup_dir, img_id_name)
         os.makedirs(out_dir_img, exist_ok=True)
-        if args.skip_file and len(os.listdir(out_dir_img)) > 0:
+        if args.skip_exist_id and len(os.listdir(out_dir_img)) > 0:
             print("skip existed id:", img_id_idx)
             continue
         print("process id:", img_id_idx, img_id_path)
@@ -195,14 +183,26 @@ def create_makeup_pair(args, img_id_path_list):
 
                 anno_info.append([f"{img_id_name}/{out_file}", subset_idx[makeup_idx]+makeup_filter_offset, prompt])
 
-    anno_path = os.path.join(args.out_dir, args.name, "{}-{:05d}_{:05d}.csv".format(args.name,
-                                                                                    args.start_idx, args.end_idx))
+    anno_path = os.path.join(args.out_dir, "{}-{:05d}_{:05d}.csv".format(os.path.basename(args.out_dir),
+                                                                         args.start_idx, args.end_idx))
     with open(anno_path, mode="w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["file", "class", "caption"])
         for info in anno_info:
             buf = [info[0], str(info[1]), info[2]]
             writer.writerow(buf)
+
+
+def get_celeb_list(data_path):
+    with open(data_path, "r", encoding="utf-8") as f:
+        celeb_info = json.load(f)
+
+    celeb_info_list = []
+    for category in celeb_info.keys():
+        for name in celeb_info[category]:
+            celeb_info_list.append([category, name])
+
+    return celeb_info_list
 
 
 def sample_celeb_id(args):
@@ -218,7 +218,7 @@ def sample_celeb_id(args):
         pipe = init_qwen_t2i()
 
 
-    id_dir = os.path.join(args.out_dir, args.name, "id")
+    id_dir = os.path.join(args.out_dir, "id")
     os.makedirs(id_dir, exist_ok=True)
 
     for celeb_idx, (profession, celeb) in enumerate(celeb_info):
@@ -279,7 +279,7 @@ def create_ffhq_id_list(data_id_path, data_face_dir, num_id, use_prev=True):
     print("Creating ffhq id list...")
 
     # 1024x1024
-    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=500, min_w=500, align=False)
+    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=500, min_w=500, align=False, td_mode="")
 
     img_path_list = glob.glob(data_face_dir + "/*/*/*.png")
     img_path_list = sorted(img_path_list)
@@ -329,7 +329,7 @@ def create_ffhq_id_list(data_id_path, data_face_dir, num_id, use_prev=True):
 
 
 def create_id_list(args):
-    id_dir = os.path.join(args.out_dir, args.name, "id")
+    id_dir = os.path.join(args.out_dir, "id")
     os.makedirs(id_dir, exist_ok=True)
 
     if "ffhq" in args.data_id_path:
@@ -361,6 +361,8 @@ def create_id_list(args):
 class FaceIDFilter():
     def __init__(self, mode="gpt"):
         self.mode = mode
+        # https://arxiv.org/pdf/2508.11624
+        # OMNIEDIT
         self.prompt = """
         You are an expert in analyzing face images and assessing image quality. Two face images will be provided: 
         the first with little or no makeup, and the second being an edited version of the first with makeup applied. 
@@ -474,7 +476,7 @@ class FaceIDFilter():
 def process_id_makeup(img_id_path_list, data_root, img_size, min_h, min_w, mix_mode="affine", start_idx=0, end_idx=-1, use_exist=False):
     verbose = True if sys.platform == 'win32' else False
 
-    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=min_h, min_w=min_w, align=False)
+    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=min_h, min_w=min_w, align=False, td_mode="")
     face_parser = FaceParser()
 
     faceid_filter = FaceIDFilter(mode="gemini")
@@ -611,8 +613,8 @@ if __name__ == '__main__':
     parser.add_argument("--data_makeup_path", type=str, default="./assets/makeup_gpto3.json", help="path to makeup style")
     parser.add_argument("--data_id_path", type=str, default="./assets/celebrity_gpto4mini.json", help="path to id list")
     parser.add_argument("--data_face_dir", type=str, default="../../data/facial/ffhq", help="path to face dataset")
-    parser.add_argument("--out_dir", type=str, default="./output")
-    parser.add_argument("--name", type=str, default="makeup_pair", help="dataset name")
+    parser.add_argument("--process", type=str, default="edit", choices=["edit", "anno", "mix"])
+    parser.add_argument("--out_dir", type=str, default="./output/makeup_pair_ffhq")
     parser.add_argument("--start_idx", type=int, default=0, help="")
     parser.add_argument("--end_idx", type=int, default=-1, help="")
     parser.add_argument("--num_id", type=int, default=20000)
@@ -623,21 +625,22 @@ if __name__ == '__main__':
     parser.add_argument('--min_h', default=500, type=int, help='min height')
     parser.add_argument('--min_w', default=500, type=int, help='min width')
     parser.add_argument("--filter_makeup", type=int, default=0, help="")
-    parser.add_argument("--skip_file", type=int, default=1, help="")
+    parser.add_argument("--skip_exist_id", type=int, default=1, help="")
     args = parser.parse_args()
 
     # create_ffhq_id_list(args.data_id_path, args.data_face_dir, args.num_id, use_prev=False)
     # create_ffhq_subset(args.data_id_path, num_sample=20000)
 
+    # resize_all_images(args.out_dir, os.path.join(args.out_dir, os.path.basename(args.out_dir)+"-resize"), args.img_size)
+
     img_id_path_list = create_id_list(args)
 
-    create_makeup_pair(args, img_id_path_list)
-
-    # merge_anno_path = merge_anno(os.path.join(args.out_dir, args.name))
-    # create_split(merge_anno_path)
-
-    # process_id_makeup(img_id_path_list, os.path.join(args.out_dir, args.name), args.img_size, args.min_h, args.min_w,
-    #                   start_idx=args.start_idx, end_idx=args.end_idx, use_exist=False)
-    # check_label(os.path.join(args.out_dir, args.name, "makeup_mix"))
-
-    # resize_all_images(os.path.join(args.out_dir, args.name), os.path.join(args.out_dir, args.name+"-resize"), args.img_size)
+    if args.process == "edit":
+        create_makeup_pair(args, img_id_path_list)
+    elif args.process == "anno":
+        merge_anno_path = merge_anno(args.out_dir)
+        create_data_split(merge_anno_path)
+    elif args.process == "mix":
+        process_id_makeup(img_id_path_list, args.out_dir, args.img_size, args.min_h, args.min_w,
+                          start_idx=args.start_idx, end_idx=args.end_idx, use_exist=False)
+        check_label(os.path.join(args.out_dir, "makeup_mix"))

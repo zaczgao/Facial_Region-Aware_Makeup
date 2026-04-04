@@ -55,6 +55,28 @@ from utils.model_3d import TDDFAV3, SMIRK
 from utils.vis_utils import show_result, show_face_result
 
 
+def get_clean_mask(mask, min_size):
+    """
+    :param mask: 0, 1 uint8
+    :param min_size: min size of the mask
+    """
+    mask = mask.astype(np.uint8)
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+
+    clean_mask = np.zeros_like(mask)
+
+    for i in range(1, num_labels):  # skip background
+        area = stats[i, cv2.CC_STAT_AREA]
+
+        if area >= min_size:
+            clean_mask[labels == i] = 1
+
+    outlier_mask = np.clip(mask.astype(np.float32) - clean_mask.astype(np.float32), 0, 1).astype(np.uint8)
+
+    return clean_mask, outlier_mask
+
+
 def get_patch(landmarks, color='lime', closed=False):
     contour = landmarks
     ops = [Path.MOVETO] + [Path.LINETO] * (len(contour) - 1)
@@ -279,7 +301,7 @@ class FaceAnalyser():
         if td_mode == "flame":
             self.model_3d = SMIRK()
         elif td_mode == "3ddfa":
-            self.model_3d = TDDFAV3(device='cpu' if sys.platform == 'win32' else 'cuda')
+            self.model_3d = TDDFAV3()
 
     @torch.no_grad()
     def get_facer_lms(self, img, all_face_info):

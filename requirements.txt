@@ -1,6 +1,6 @@
 numpy==1.26.4
 timm==0.9.16
-diffusers==0.37.0
+diffusers==0.37.1
 transformers==4.53.3
 peft==0.17.1
 safetensors==0.5.3

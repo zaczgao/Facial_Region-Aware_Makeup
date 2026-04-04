@@ -29,6 +29,16 @@ SCRIPT_DIR = os.path.dirname(abspath)
 from utils.vis_utils import show_result
 
 
+IMG_EXTENSIONS = [
+    '.jpg', '.JPG', '.jpeg', '.JPEG',
+    '.png', '.PNG', '.ppm', '.PPM', '.bmp', '.BMP',
+]
+
+
+def is_image_file(filename):
+    return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
+
+
 def load_image(image_path, height=None, width=None, interpolate=PIL.Image.Resampling.LANCZOS):
     if type(image_path) is str:
         image = PIL.Image.open(image_path).convert("RGB")

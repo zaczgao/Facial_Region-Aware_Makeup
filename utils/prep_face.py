@@ -32,19 +32,18 @@ from utils.tps import TPSDeform
 from utils.vis_utils import show_result
 
 
-def prepare_face_makeup_style(args):
+def prep_face(args):
     verbose = True if sys.platform == 'win32' else False
-    extensions = (".jpg", ".jpeg", ".png", ".bmp", ".tiff")
-
-    img_path_list = glob.glob(args.data_dir + "/*.png") + glob.glob(args.data_dir + "/*/*.png")
-    img_path_list = sorted(img_path_list)
-    print("Found {} face images at {}".format(len(img_path_list), args.data_dir))
 
     face_analyser = FaceAnalyser(det_thresh=args.det_thresh, min_h=args.min_h, min_w=args.min_w,
                                  exp_ratio=args.exp_ratio, use_square=args.use_square,
                                  align=args.align, image_size=args.image_size, td_mode="3ddfa")
     face_parser = FaceParser()
     tps_deform = TPSDeform()
+    
+    img_path_list = glob.glob(args.data_dir + "/*.png") + glob.glob(args.data_dir + "/*/*.png")
+    img_path_list = sorted(img_path_list)
+    print("Found {} face images at {}".format(len(img_path_list), args.data_dir))
 
     no_face_list = []
     small_face_list = []
@@ -64,10 +63,10 @@ def prepare_face_makeup_style(args):
 
         if len(face_info) == 0:
             if is_small_face:
-                print("small faces found for {}".format(img_path))
+                print("small faces at {}".format(img_path))
                 small_face_list.append(img_path)
             else:
-                print("no faces found for {}".format(img_path))
+                print("no faces at {}".format(img_path))
                 no_face_list.append(img_path)
         else:
             pick_idx = face_analyser.find_largest_face(face_info)
@@ -161,4 +160,4 @@ if __name__ == '__main__':
 
     print(args)
 
-    prepare_face_makeup_style(args)
+    prep_face(args)

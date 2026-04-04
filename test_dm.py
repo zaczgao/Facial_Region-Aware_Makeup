@@ -78,7 +78,7 @@ def parse_args():
     parser.add_argument("--use_ipa", type=int, default=0, help="Use ipa for makeup style")
     parser.add_argument("--use_text_inv", type=int, default=0, help="Use text inversion for makeup style")
     parser.add_argument("--ipa_scale", type=float, default=1.)
-    parser.add_argument("--use_3d", type=int, default=0, help="Use 3d")
+    parser.add_argument("--geo_mode", type=str, default="3d", choices=["3d", "normal", "keypoint"])
 
     parser.add_argument("--data_root", type=str, default="")
     parser.add_argument("--anno_path", type=str, default="")
@@ -93,7 +93,7 @@ def parse_args():
     parser.add_argument("--out_dir", type=str, default="")
     parser.add_argument("--data_name", type=str, default="")
     parser.add_argument("--token_idx", type=str, default=None)
-    parser.add_argument("--vis_cat", type=int, default=0)
+    parser.add_argument("--vis_all", type=int, default=0)
     parser.add_argument("--vis_attn", type=int, default=0)
 
     args = parser.parse_args()
@@ -101,11 +101,11 @@ def parse_args():
     return args
 
 
-def put_back(img_src_path, img_tgt_path):
+def paste_back_crop(img_src_path, img_tgt_path, exp_ratio, use_square):
     verbose = False
 
-    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=150, min_w=150, exp_ratio=0.4, align=False,
-                                 td_mode="3ddfa")
+    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=150, min_w=150, exp_ratio=exp_ratio, use_square=use_square,
+                                 align=False, td_mode="3ddfa")
 
     img_src = load_image(img_src_path)
     img_tgt = load_image(img_tgt_path)
@@ -391,9 +391,9 @@ def main():
             face_info, is_small_face = face_analyser.get_face_info(img_bgr=np.array(img_id)[:, :, ::-1], verbose=verbose)
             pick_idx = face_analyser.find_largest_face(face_info)
 
-            if args.use_3d:
+            if args.geo_mode == "3d":
                 img_pose = face_info[pick_idx]["face_3d"]
-            else:
+            elif args.geo_mode == "keypoint":
                 img_pose = face_analyser.get_lms_image(face_info[pick_idx]["landmark_3d_68"][:, :2],
                                                        img_id.size[1], img_id.size[0],
                                                        bbox=face_info[pick_idx]["bbox_crop"],
@@ -423,9 +423,9 @@ def main():
         else:
             img_id_name = os.path.splitext(os.path.basename(img_id_path))[0]
 
-            if args.use_3d:
+            if args.geo_mode == "3d":
                 img_pose_path = os.path.join(args.data_root, "3d", "{}.png".format(img_id_name))
-            else:
+            elif args.geo_mode == "keypoint":
                 img_pose_path = os.path.join(args.data_root, "pose", "{}.png".format(img_id_name))
             img_pose = load_image(img_pose_path)
 
@@ -464,19 +464,19 @@ def main():
         img_makeup_name = os.path.splitext(os.path.basename(img_makeup_path))[0]
         image.save(os.path.join(out_dir_img, "{}-{}.png".format(img_id_name, img_makeup_name)))
 
-        if args.vis_cat:
-            image_cat = []
+        if args.vis_all:
+            image_all = []
             if img_id is not None:
-                image_cat += [img_id]
+                image_all += [img_id]
 
             if isinstance(img_makeup, list):
-                image_cat += img_makeup
+                image_all += img_makeup
             else:
-                image_cat += [img_makeup]
+                image_all += [img_makeup]
 
-            image_cat += [image]
+            image_all += [image]
 
-            concatenate_images(image_cat, os.path.join(out_dir_img, "{}-{}-cat.jpg".format(img_id_name, img_makeup_name)))
+            concatenate_images(image_all, os.path.join(out_dir_img, "{}-{}-cat.jpg".format(img_id_name, img_makeup_name)))
 
         if args.vis_attn:
             vis_attn_map(np.array(img_id)[:, :, ::-1], pipeline.unet, args.validation_prompt, pipeline.tokenizer, pipeline.placeholder_token_ids,

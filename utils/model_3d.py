@@ -104,7 +104,7 @@ class TDDFAV3():
         self.model = face_model(backbone='resnet50', device=device, use_ldm68=True, use_ldm106=False, use_ldm134=False)
 
     @torch.no_grad()
-    def __call__(self, img, lms5, alpha_dict_tgt=None):
+    def __call__(self, img, lms5, alpha_dict_src=None):
         H = img.shape[0]
 
         landmarks = lms5.copy()
@@ -113,7 +113,7 @@ class TDDFAV3():
         trans_params, img_face, lm_face, _ = align_img(PIL.Image.fromarray(img), landmarks, self.lm3d_std)
         img_face = torch.tensor(np.array(img_face) / 255., dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
 
-        results, param_3d = self.model.forward(img_face.to(self.model.device), alpha_dict_tgt=alpha_dict_tgt)
+        results, param_3d = self.model.forward(img_face.to(self.model.device), alpha_dict_src=alpha_dict_src)
 
         img_render = self.render(trans_params, img, results)
 

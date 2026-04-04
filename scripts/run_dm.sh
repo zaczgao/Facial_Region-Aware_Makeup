@@ -66,7 +66,7 @@ USE_TEXT_INV=0
 SD_LORA=1
 SD_LORA_RANK=8
 SD_LORA_ALPHA=16
-USE_3D=1
+GEO_MODE="3d"
 OUT_DIR="./output/dm"
 STAGE1_OUT_DIR="./output/dm-stage1"
 
@@ -90,7 +90,7 @@ master_addr=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_ADDR=$master_addr
 
 
-# pretrain id controlnet -> STAGE1_OUT_DIR
+# stage1 pretrain id controlnet -> STAGE1_OUT_DIR
 #srun --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MASTER_PORT} --mixed_precision=fp16 --multi_gpu \
 #  ./train_dm.py \
 #  --pretrained_model_name_or_path=${DM_CKPT} \
@@ -101,7 +101,7 @@ export MASTER_ADDR=$master_addr
 #  --placeholder_token=${PLACEHOLDER} \
 #  --vector_shuffle --swap_pair_rate=0. --drop_text_rate=0.05 --drop_style_rate=0.05 --drop_all_rate=0.05 \
 #  --attn_size="32,64" --num_parts=${NUM_PARTS} --skip_background \
-#  --use_ipa=0 --use_text_inv=0 --use_3d=${USE_3D} \
+#  --use_ipa=0 --use_text_inv=0 --geo_mode=${GEO_MODE} \
 #  --use_lora=0 --rank=${SD_LORA_RANK} --lora_alpha=${SD_LORA_ALPHA} \
 #  --weight_attn=0.1 \
 #  --train_batch_size=32 --gradient_accumulation_steps=1 \
@@ -112,6 +112,7 @@ export MASTER_ADDR=$master_addr
 #  2>&1 | tee ./dm-train-stage1-${NOW}.txt
 
 
+# stage2 train makeup -> OUT_DIR
 srun --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MASTER_PORT} --mixed_precision=fp16 --multi_gpu \
   ./train_dm.py \
   --pretrained_model_name_or_path=${DM_CKPT} \
@@ -123,7 +124,7 @@ srun --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MASTER
   --placeholder_token=${PLACEHOLDER} \
   --vector_shuffle --swap_pair_rate=0. --drop_text_rate=0.05 --drop_style_rate=0.05 --drop_all_rate=0.05 \
   --attn_size="32,64" --num_parts=${NUM_PARTS} --skip_background \
-  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --use_3d=${USE_3D} \
+  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --geo_mode=${GEO_MODE} \
   --use_lora=${SD_LORA} --rank=${SD_LORA_RANK} --lora_alpha=${SD_LORA_ALPHA} \
   --weight_attn=0.1 \
   --train_batch_size=32 --gradient_accumulation_steps=1 \
@@ -131,7 +132,7 @@ srun --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MASTER
   --checkpointing_steps=20000 --checkpoints_total_limit=5 \
   --val_data_root=${VAL_DATA_ROOT} --val_anno_path=${VAL_ANNO_PATH} --validation_prompt="${PROMPT}" --num_validation_images=1 \
   --output_dir=${OUT_DIR} --log_frequency=100 --report_to="tensorboard" \
-  2>&1 | tee ./dm-train-${NOW}.txt
+  2>&1 | tee ./dm-train-stage2-${NOW}.txt
 
 
 # tensorboard --logdir path/to/logs --port 6006 --host 0.0.0.0
@@ -147,7 +148,7 @@ srun --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MASTER
 #    --ckpt_dir=${OUT_DIR} \
 #    --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
 #    --placeholder_token=${PLACEHOLDER} \
-#    --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --use_3d=${USE_3D} \
+#    --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --geo_mode=${GEO_MODE} \
 #    --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
 #    --data_root=${VAL_DATA_ROOT} --anno_path=${VAL_ANNO_PATH} --validation_prompt="${PROMPT}" \
 #    --detect_face=${DET_FACE} \
@@ -162,48 +163,14 @@ srun --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MASTER
 #  --ckpt_dir=${OUT_DIR} \
 #  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
 #  --placeholder_token=${PLACEHOLDER} \
-#  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --use_3d=${USE_3D} \
+#  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --geo_mode=${GEO_MODE} \
 #  --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
 #  --data_id_path="../data/makeup/benchmark/mine/id/1698.png" \
 #  --data_makeup_path="../data/makeup/benchmark/mine/makeup/2407.png" \
 #  --validation_prompt="${PROMPT}" \
 #  --guidance_scale=7.5 --ipa_scale=1.0 \
 #  --detect_face=1 --exp_ratio=-1 --use_square=1 \
-#  --vis_cat=1 --vis_attn=1 \
-#  --out_dir="./result"
-
-
-# "an Asian girl with makeup, short hair", "a man with makeup, wearing hat"
-# text-to-image
-#python -u ./test_dm.py \
-#  --pretrained_model_name_or_path=${DM_CKPT} \
-#  --ckpt_dir=${OUT_DIR} \
-#  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
-#  --placeholder_token=${PLACEHOLDER} \
-#  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --use_3d=${USE_3D} \
-#  --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
-#  --data_id_path="" \
-#  --data_makeup_path="../data/makeup/benchmark/mine/makeup/1080.png" \
-#  --validation_prompt="an Asian girl with makeup, short hair" \
-#  --detect_face=1 \
-#  --vis_cat=1 \
-#  --out_dir="./result"
-
-
-# region
-#python -u ./test_dm.py \
-#  --pretrained_model_name_or_path=${DM_CKPT} \
-#  --ckpt_dir=${OUT_DIR} \
-#  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
-#  --placeholder_token=${PLACEHOLDER} \
-#  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --use_3d=${USE_3D} \
-#  --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
-#  --data_id_path="../data/makeup/benchmark/mine/id/00059.png" \
-#  --data_makeup_path="../data/makeup/benchmark/mine/makeup/1878.png" \
-#  --validation_prompt="${PROMPT}" \
-#  --detect_face=1 --exp_ratio=-1 --use_square=1 \
-#  --token_idx="0" \
-#  --vis_cat=1 \
+#  --vis_all=1 --vis_attn=1 \
 #  --out_dir="./result"
 
 
@@ -213,12 +180,12 @@ srun --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MASTER
 #  --ckpt_dir=${OUT_DIR} \
 #  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
 #  --placeholder_token=${PLACEHOLDER} \
-#  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --use_3d=${USE_3D} \
+#  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --geo_mode=${GEO_MODE} \
 #  --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
 #  --data_id_path="../data/makeup/benchmark/mine/id/stablemakeup-2.jpg" \
 #  --data_makeup_path="../data/makeup/benchmark/mine/makeup/vRX31.png;../data/makeup/benchmark/mine/makeup/157.png;../data/makeup/benchmark/mine/makeup/126.png" \
 #  --validation_prompt="${PROMPT}" \
 #  --guidance_scale=7.5 --ipa_scale=1.0 \
 #  --detect_face=1 --exp_ratio=-1 --use_square=1 \
-#  --vis_cat=1 --vis_attn=1 \
+#  --vis_all=1 --vis_attn=1 \
 #  --out_dir="./result"

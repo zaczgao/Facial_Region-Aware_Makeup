@@ -468,16 +468,16 @@ class face_model:
             seg[:,:,i] = mask.squeeze()
         return seg
 
-    def forward(self, input_img, no_pca = False, alpha_dict_tgt=None):
+    def forward(self, input_img, no_pca = False, alpha_dict_src=None):
         assert self.net_recon.training == False
         alpha = self.net_recon(input_img)
 
         alpha_dict = self.split_alpha(alpha)
 
-        if alpha_dict_tgt is not None:
-            alpha_dict['exp'] = alpha_dict_tgt['exp'].clone()
-            alpha_dict['angle'] = alpha_dict_tgt['angle'].clone()
-            alpha_dict['trans'] = alpha_dict_tgt['trans'].clone()
+        if alpha_dict_src is not None:
+            alpha_dict['id'] = alpha_dict_src['id'].clone()
+            alpha_dict['alb'] = alpha_dict_src['alb'].clone()
+            alpha_dict['sh'] = alpha_dict_src['sh'].clone()
 
         face_shape = self.compute_shape(alpha_dict['id'], alpha_dict['exp'])
         rotation = self.compute_rotation(alpha_dict['angle'])

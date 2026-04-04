@@ -44,9 +44,9 @@ except NameError:
     abspath = os.getcwd()
 SCRIPT_DIR = os.path.dirname(abspath)
 
-HF_TOKEN=f""
-OPENAI_API_KEY=f""
-OPENROUTER_API_KEY=f""
+HF_TOKEN = os.getenv("HF_TOKEN") or f""
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or f""
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or f""
 
 
 def init_sd():
@@ -577,7 +577,7 @@ def merge_anno(data_dir, split=None):
     return merge_anno_path
 
 
-def create_split(anno_path):
+def create_data_split(anno_path):
     df = pd.read_csv(anno_path, encoding="utf-8")
 
     df_shuffle = df.sample(frac=1, random_state=42, ignore_index=False)

@@ -40,7 +40,7 @@ SCRIPT_DIR = os.path.dirname(abspath)
 sys.path.append(os.path.dirname(SCRIPT_DIR))
 
 from utils.data_utils import get_makeup_list, get_img_context, init_sd, init_flux, \
-    sample_sd, sample_flux, merge_anno, create_split
+    sample_sd, sample_flux, merge_anno, create_data_split
 
 
 def create_makeup_style(args):
@@ -91,7 +91,7 @@ def create_makeup_style(args):
                     image = sample_flux(pipe, prompt)
 
                 class_str = "{:03d}".format(makeup_idx)
-                out_dir_img = os.path.join(args.out_dir, args.name, "image", class_str)
+                out_dir_img = os.path.join(args.out_dir, "image", class_str)
                 os.makedirs(out_dir_img, exist_ok=True)
                 out_file = "{}-{}-{}-{}".format(class_str, style.replace(" ", "_"), "_".join(race.split(" ")),
                                                 "{:03d}.png".format(img_idx))
@@ -100,7 +100,7 @@ def create_makeup_style(args):
 
                 anno_info.append([out_file, makeup_idx, prompt])
 
-    anno_path = os.path.join(args.out_dir, args.name, "{}-{:02d}_{:02d}.csv".format(args.name,
+    anno_path = os.path.join(args.out_dir, "{}-{:02d}_{:02d}.csv".format(os.path.basename(args.out_dir),
                                                                                     args.start_idx, args.end_idx))
     with open(anno_path, mode="w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -113,8 +113,7 @@ def create_makeup_style(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Visualization')
     parser.add_argument("--data_path", type=str, default="./assets/makeup_gpto3.json", help="path to dataset")
-    parser.add_argument("--name", type=str, default="makeup_style", help="dataset name")
-    parser.add_argument("--out_dir", type=str, default="./output", help="output folder")
+    parser.add_argument("--out_dir", type=str, default="./output/makeup_style", help="output folder")
     parser.add_argument("--method", type=str, default="sd", help="sd model")
     parser.add_argument("--prompt_neg", type=str, default="", help="negative prompt")
     parser.add_argument("--start_idx", type=int, default=0, help="")
@@ -135,6 +134,5 @@ if __name__ == '__main__':
 
     # create_makeup_style(args)
 
-    merge_anno(os.path.join(args.out_dir, args.name))
-
-    create_split(os.path.join(args.out_dir, args.name, "{}.csv".format(args.name)))
+    merge_anno_path = merge_anno(args.out_dir)
+    create_data_split(merge_anno_path)
