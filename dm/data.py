@@ -8,6 +8,7 @@ __author__ = "GZ"
 
 import os
 import sys
+import re
 import math
 import random
 import numpy as np
@@ -31,7 +32,7 @@ except NameError:
 SCRIPT_DIR = os.path.dirname(abspath)
 
 from dm.const import imagenet_templates_small
-from style_clip.augment import OPENAI_DATASET_MEAN, OPENAI_DATASET_STD
+from style_clip.augment import OPENAI_DATASET_MEAN, OPENAI_DATASET_STD, PixelDropout
 from utils.vis_utils import show_result
 
 
@@ -143,7 +144,7 @@ def random_crop_arr(pil_image, image_size, min_crop_frac=0.8, max_crop_frac=1.0,
 class MakeupDataset(Dataset):
     def __init__(self, data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, use_3d):
+                 swap_pair_rate, drop_prob, skip_background, num_parts, geo_mode):
         self.data_root = data_root
         self.resolution = resolution
         self.random_crop = not center_crop
@@ -156,12 +157,12 @@ class MakeupDataset(Dataset):
         self.drop_tokens = drop_tokens
         self.drop_tokens_rate = drop_tokens_rate
         self.swap_pair_rate = swap_pair_rate
-        self.drop_text_rate = drop_cond_rate[0]
-        self.drop_style_rate = drop_cond_rate[1]
-        self.drop_all_rate = drop_cond_rate[2]
+        self.drop_p_text = drop_prob[0]
+        self.drop_p_style = drop_prob[1]
+        self.drop_p_all = drop_prob[2]
         self.skip_background = skip_background
         self.num_parts = num_parts
-        self.use_3d = use_3d
+        self.geo_mode = geo_mode
 
         self.label_names = ['background', 'face', 'rb', 'lb', 're', 'le', 'nose', 'ulip', 'imouth', 'llip', 'hair']
         self.label_group = [
@@ -204,17 +205,21 @@ class MakeupDataset(Dataset):
             # transforms.Resize(size=224, interpolation=transforms.InterpolationMode.BICUBIC),
             # transforms.CenterCrop(224),
             transforms.RandomResizedCrop(size=224, scale=(0.9, 1.0), interpolation=transforms.InterpolationMode.BICUBIC),
-            transforms.RandomApply([transforms.RandomAffine(10, translate=(0.1, 0.1), scale=(0.7, 1.3),
-                                                            interpolation=transforms.InterpolationMode.BICUBIC)],
-                                   p=1.0),
-            transforms.ElasticTransform(alpha=100.),
+            transforms.RandomApply([
+                transforms.RandomAffine(10, translate=(0.1, 0.1), scale=(0.8, 1.2), interpolation=transforms.InterpolationMode.BICUBIC)
+            ], p=1.0),
+            transforms.ElasticTransform(alpha=50.),
+            transforms.RandomApply([
+                transforms.ColorJitter(0.2, 0.1, 0.0, 0.0)
+            ], p=0.1),
             transforms.ToTensor(),
             transforms.RandomApply([
                 transforms.RandomChoice([
                     GaussianNoise(mean=0.0, sigma=0.03),
-                    transforms.GaussianBlur(kernel_size=(3, 3)),
+                    transforms.GaussianBlur(kernel_size=(5, 5)),
+                    PixelDropout(dropout_prob=0.01, value=0)
                 ])
-            ], p=1.0),
+            ], p=0.5),
             transforms.Normalize(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD),
         ])
 
@@ -223,20 +228,20 @@ class MakeupDataset(Dataset):
     def make_dataset(self, data_root):
         root_sub_folder = os.listdir(data_root)
         if "id" in root_sub_folder:
-            data_root = [data_root]
+            data_dir = [data_root]
         else:
-            data_root = [os.path.join(data_root, folder) for folder in root_sub_folder]
+            data_dir = [os.path.join(data_root, folder) for folder in root_sub_folder]
 
         instances = []
-        for directory in data_root:
+        for directory in data_dir:
             img_id_root = os.path.join(directory, "id")
             img_id_path_list = glob.glob(img_id_root + "/*.png") + glob.glob(img_id_root + "/*/*.png")
             img_id_path_list = sorted(img_id_path_list)
 
             for img_id_path in img_id_path_list:
-                id_name = os.path.splitext(os.path.basename(img_id_path))[0]
+                img_id_name = os.path.splitext(os.path.basename(img_id_path))[0]
 
-                makeup_dir = os.path.join(directory, "makeup_mix", id_name)
+                makeup_dir = os.path.join(directory, "makeup_mix", img_id_name)
                 if not os.path.isdir(makeup_dir):
                     continue
 
@@ -249,13 +254,15 @@ class MakeupDataset(Dataset):
 
     def preprocess_caption(self, token_idx, is_drop_text):
         if self.use_templates and random.random() < 0.5 and self.base_prompt != "":
-            base_prompt = self.base_prompt
-            if base_prompt.lower().startswith("a "):
-                base_prompt = base_prompt[2:]
+            match = re.search(r"^a\s+(.*)$", self.base_prompt)
+            if match:
+                base_prompt = match.group(1)
+            else:
+                base_prompt = self.base_prompt
 
             caption = random.choice(imagenet_templates_small).format(base_prompt)
         else:
-            caption = f"{self.base_prompt}"
+            caption = self.base_prompt
 
         if is_drop_text:
             caption = ""
@@ -286,9 +293,9 @@ class MakeupDataset(Dataset):
         img_makeup_aug = augmented["image"]
         img_id_aug = augmented["image_id"]
         img_pose_aug = augmented['image_pose'].transpose(1, 2, 0)
-        seg_mask_aug = torch.from_numpy(augmented['seg_mask']).to(torch.float32)
-        face_mask_aug = torch.from_numpy(augmented['face_mask']).to(torch.float32)
-        exp_mask_aug = torch.from_numpy(augmented['exp_mask']).to(torch.float32)
+        seg_mask_aug = torch.from_numpy(augmented['seg_mask'])
+        face_mask_aug = torch.from_numpy(augmented['face_mask'])
+        exp_mask_aug = torch.from_numpy(augmented['exp_mask'])
 
         return img_makeup_aug, img_id_aug, img_pose_aug, seg_mask_aug, face_mask_aug, exp_mask_aug
 
@@ -333,9 +340,9 @@ class MakeupDataset(Dataset):
         if data_folder == "id":
             data_folder = ""
 
-        if self.use_3d:
+        if self.geo_mode == "3d":
             pose_path = os.path.join(data_root, "3d", data_folder, "{}.png".format(data_file_name))
-        else:
+        elif self.geo_mode == "keypoint":
             pose_path = os.path.join(data_root, "pose", data_folder, "{}.png".format(data_file_name))
         img_pose_pil = PIL.Image.open(pose_path).convert("RGB")
         assert img_id_pil.size == img_pose_pil.size
@@ -344,8 +351,7 @@ class MakeupDataset(Dataset):
 
         mask_path = os.path.join(data_root, "mask", data_folder, "{}.pt".format(data_file_name))
         mask_dict = torch.load(mask_path, map_location="cpu")
-        seg_pred = mask_dict["seg_pred"].to(torch.float32)
-        seg_mask, face_mask, exp_mask = self.prep_mask(seg_pred, self.label_names, self.label_group)
+        seg_mask, face_mask, exp_mask = self.prep_mask(mask_dict["seg_pred"], self.label_names, self.label_group)
         if self.skip_background:
             seg_mask = seg_mask[1:]
         token_idx = (seg_mask.sum(dim=(1, 2)) >= 1).nonzero(as_tuple=True)[0]
@@ -379,23 +385,26 @@ class MakeupDataset(Dataset):
             face_mask,
             exp_mask)
 
-        img_makeup = self.transforms_post(img_makeup)
-        img_id = self.transforms_post_cond(img_id)
-        img_pose = self.transforms_post_cond(img_pose)
+        assert torch.all((face_mask == 0) | (face_mask == 1))
+        assert torch.all((exp_mask == 0) | (exp_mask == 1))
 
         # img_style = self.deform(image=np.array(img_makeup_pil))
         # img_style = self.transforms_style(PIL.Image.fromarray(img_style))
         img_style = self.transforms_style(img_makeup_pil)
 
+        img_makeup = self.transforms_post(img_makeup)
+        img_id = self.transforms_post_cond(img_id)
+        img_pose = self.transforms_post_cond(img_pose)
+
         # set cfg drop rate
         is_drop_text = False
         is_drop_style = False
         rand_num = random.random()
-        if rand_num < self.drop_text_rate:
+        if rand_num < self.drop_p_text:
             is_drop_text = True
-        elif rand_num < (self.drop_text_rate + self.drop_style_rate):
+        elif rand_num < (self.drop_p_text + self.drop_p_style):
             is_drop_style = True
-        elif rand_num < (self.drop_text_rate + self.drop_style_rate + self.drop_all_rate):
+        elif rand_num < (self.drop_p_text + self.drop_p_style + self.drop_p_all):
             is_drop_text = True
             is_drop_style = True
 
@@ -451,10 +460,10 @@ def collate_fn(examples):
 class SyntheticDataset(MakeupDataset):
     def __init__(self, data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, use_3d):
-        super().__init__(data_root, data_root, resolution, center_crop, random_flip,
+                 swap_pair_rate, drop_prob, skip_background, num_parts, geo_mode):
+        super().__init__(data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_cond_rate, skip_background, num_parts, use_3d)
+                 swap_pair_rate, drop_prob, skip_background, num_parts, geo_mode)
 
         self.image = PIL.Image.new('RGB', (self.resolution, self.resolution))
         self.dataset_size = 100
@@ -532,8 +541,8 @@ if __name__ == '__main__':
 
     dataset = MakeupDataset(data_dir, 512, center_crop=False, random_flip=True,
                             tokenizer=tokenizer, base_prompt=base_prompt, use_templates=True, vector_shuffle=True, drop_tokens=False, drop_tokens_rate=0.,
-                            swap_pair_rate=0.1, drop_cond_rate=[0.05, 0.05, 0.05],
-                            skip_background=True, num_parts=num_parts, use_3d=False)
+                            swap_pair_rate=0.1, drop_prob=[0.05, 0.05, 0.05],
+                            skip_background=True, num_parts=num_parts, geo_mode="3d")
 
     img = PIL.Image.open("./assets/images/00128-img_swap.png")
     img_style = dataset.deform(image=np.array(img))
@@ -549,10 +558,10 @@ if __name__ == '__main__':
     print("dataset size", len(dataset))
     print(dataset[0])
 
-    loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True,
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True,
                                          drop_last=False, collate_fn=collate_fn)
 
-    for i, batch in enumerate(loader):
+    for i, batch in enumerate(dataloader):
         img_makeup = denormalize_batch(batch["pixel_values"], 0.5, 0.5)
         img_style = denormalize_batch(batch["style_pixel_values"], OPENAI_DATASET_MEAN, OPENAI_DATASET_STD)
         img_id = batch["id_pixel_values"]

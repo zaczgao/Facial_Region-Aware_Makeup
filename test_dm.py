@@ -36,6 +36,7 @@ from dm.attn_proc import setup_attn_processor, load_attn_processor
 from dm.makeup_adapter import MakeupAdapter
 from dm.pipeline import MakeupSDPipeline
 from dm.losses import _compute_avg_attn_map
+from dm.ema import load_ema
 from style_clip.model import StyleCLIP
 from style_clip import clip_utils
 from utils.face_analysis import FaceAnalyser, FaceParser
@@ -74,11 +75,12 @@ def parse_args():
     parser.add_argument("--placeholder_token", type=str, default="<part>", help="A token to use as a placeholder for the concept.")
     parser.add_argument("--num_parts", type=int, default=4, help="Number of facial regions")
     parser.add_argument("--num_heads_part", type=int, default=16, help="Number of head per facial region")
-    parser.add_argument("--use_lora", type=int, default=0, help="Use lora for sd backbone")
     parser.add_argument("--use_ipa", type=int, default=0, help="Use ipa for makeup style")
     parser.add_argument("--use_text_inv", type=int, default=0, help="Use text inversion for makeup style")
     parser.add_argument("--ipa_scale", type=float, default=1.)
-    parser.add_argument("--use_3d", type=int, default=0, help="Use 3d")
+    parser.add_argument("--geo_mode", type=str, default="3d", choices=["3d", "normal", "keypoint"])
+    parser.add_argument("--use_lora", type=int, default=0, help="Use lora for sd backbone")
+    parser.add_argument("--use_ema", type=int, default=0, help="use ema model")
 
     parser.add_argument("--data_root", type=str, default="")
     parser.add_argument("--anno_path", type=str, default="")
@@ -86,14 +88,14 @@ def parse_args():
     parser.add_argument("--data_makeup_path", type=str, default="")
     parser.add_argument("--validation_prompt", type=str, default=None)
     parser.add_argument("--resolution", type=int, default=512)
-    parser.add_argument('--guidance_scale', default=7.5, type=float, help='cfg')
+    parser.add_argument('--guidance_scale', default=5.5, type=float, help='cfg')
     parser.add_argument("--detect_face", type=int, default=0)
-    parser.add_argument('--exp_ratio', default=0.4, type=float, help='')
+    parser.add_argument('--exp_ratio', default=0.25, type=float, help='')
     parser.add_argument("--use_square", type=int, default=1)
     parser.add_argument("--out_dir", type=str, default="")
     parser.add_argument("--data_name", type=str, default="")
     parser.add_argument("--token_idx", type=str, default=None)
-    parser.add_argument("--vis_cat", type=int, default=0)
+    parser.add_argument("--vis_all", type=int, default=0)
     parser.add_argument("--vis_attn", type=int, default=0)
 
     args = parser.parse_args()
@@ -101,27 +103,66 @@ def parse_args():
     return args
 
 
-def put_back(img_src_path, img_tgt_path):
+# https://github.com/Tencent-Hunyuan/HunyuanPortrait
+def create_soft_mask(size, border_ratio=0.1):
+    """
+    create a soft mask with edge blurring for smooth blending.
+    size: (width, height)
+    """
+    w, h = size
+    mask = np.ones((h, w), dtype=np.float32)
+
+    # calculate the number of pixels for edge blurring
+    border_w = min(int(w * border_ratio), w // 2)
+    border_h = min(int(h * border_ratio), h // 2)
+
+    # horizontal direction gradient
+    if border_w > 0:
+        mask[:, :border_w] *= np.linspace(0, 1, border_w, dtype=np.float32)[None, :]
+        mask[:, -border_w:] *= np.linspace(1, 0, border_w, dtype=np.float32)[None, :]
+
+    # vertical direction gradient
+    if border_h > 0:
+        mask[:border_h, :] *= np.linspace(0, 1, border_h, dtype=np.float32)[:, None]
+        mask[-border_h:, :] *= np.linspace(1, 0, border_h, dtype=np.float32)[:, None]
+
+    mask = np.clip(mask, 0, 1)
+
+    return mask[..., None]  # add channel dimension (H, W, 1)
+
+
+def paste_back_crop(img_src_ori, img_tgt_crop, bbox, use_mask=True, exp_ratio=None, use_square=None, out_path=None):
     verbose = False
 
-    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=150, min_w=150, exp_ratio=0.4, align=False,
-                                 td_mode="3ddfa")
+    if isinstance(img_src_ori, str):
+        face_analyser = FaceAnalyser(det_thresh=0.5, min_h=150, min_w=150, exp_ratio=exp_ratio, use_square=use_square,
+                                     align=False, td_mode="")
 
-    img_src = load_image(img_src_path)
-    img_tgt = load_image(img_tgt_path)
+        img_src_ori = load_image(img_src_ori)
+        img_tgt_crop = load_image(img_tgt_crop)
 
-    face_info, is_small_face = face_analyser.get_face_info(img_bgr=np.array(img_src)[:, :, ::-1], verbose=verbose)
-    pick_idx = face_analyser.find_largest_face(face_info)
+        face_info, is_small_face = face_analyser.get_face_info(img_bgr=np.array(img_src_ori)[:, :, ::-1], verbose=verbose)
+        pick_idx = face_analyser.find_largest_face(face_info)
 
-    bbox = face_info[pick_idx]["bbox_crop"]
+        bbox = face_info[pick_idx]["bbox_crop"]
+
     height, width = bbox[3] - bbox[1], bbox[2] - bbox[0]
-    img_tgt = img_tgt.resize((width, height), resample=PIL.Image.Resampling.LANCZOS)
+    img_tgt_crop = img_tgt_crop.resize((width, height), resample=PIL.Image.Resampling.LANCZOS)
 
-    img_src = np.array(img_src)
-    img_tgt = np.array(img_tgt)
-    img_src[bbox[1]:bbox[3], bbox[0]:bbox[2]] = img_tgt
-    img_out = PIL.Image.fromarray(img_src)
-    img_out.save("test.png")
+    mask = np.ones((height, width, 1), dtype=np.float32)
+    if use_mask:
+        mask = create_soft_mask((width, height))
+
+    img_edit = np.array(img_src_ori).copy()
+    img_edit_crop = np.array(img_tgt_crop).astype(np.float32) * mask + \
+                     img_edit[bbox[1]:bbox[3], bbox[0]:bbox[2]].astype(np.float32)  * (1. - mask)
+    img_edit_crop = np.clip(img_edit_crop.round(), 0, 255).astype(np.uint8)
+    img_edit[bbox[1]:bbox[3], bbox[0]:bbox[2]] = img_edit_crop
+
+    if out_path is not None:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        PIL.Image.fromarray(img_edit).save(out_path)
+    return img_edit
 
 
 def group_mask(seg_mask, label_names, label_group, out_dir=None):
@@ -208,8 +249,8 @@ def vis_attn_map(img, unet, prompt, tokenizer, placeholder_token_ids, attn_size=
         cv2.imwrite(os.path.join(out_dir, f"attn-{idx}.png"), overlay)
 
 
-def init_pipeline(pretrained_model_name_or_path, revision, variant, placeholder_token, num_parts, num_heads_part, use_lora,
-                  use_ipa, use_text_inv,
+def init_pipeline(pretrained_model_name_or_path, revision, variant, placeholder_token, num_parts, num_heads_part,
+                  use_ipa, use_text_inv, use_lora, use_ema,
                   style_clip_ckpt, use_clip_lora, clip_hidden, **kargs):
     ipa_scale = kargs["ipa_scale"]
     ckpt_dir = kargs["ckpt_dir"]
@@ -233,7 +274,7 @@ def init_pipeline(pretrained_model_name_or_path, revision, variant, placeholder_
         style_clip.prep_lora_model()
     clip_utils.load_network(style_clip, style_clip_ckpt, "state_dict", strict=False)
     style_clip = style_clip.eval()
-    style_clip = style_clip.to(device, dtype=weight_dtype)
+    style_clip = style_clip.to(device)
 
     if isinstance(clip_hidden, str):
         clip_hidden = [int(a) for a in clip_hidden.split(",")]
@@ -247,9 +288,15 @@ def init_pipeline(pretrained_model_name_or_path, revision, variant, placeholder_
         use_ipa=use_ipa,
         use_text_inv=use_text_inv
     )
-    makeup_adapter.load_from_checkpoint(os.path.join(ckpt_dir, "makeup_adapter.pt"))
+    if use_ema:
+        adapter_path = os.path.join(ckpt_dir, "adapter_ema.pt")
+        load_ema(makeup_adapter, adapter_path)
+    else:
+        adapter_path = os.path.join(ckpt_dir, "adapter.pt")
+        makeup_adapter.load_from_checkpoint(adapter_path)
+    print(f"Loaded adapter weight from {adapter_path}")
     makeup_adapter = makeup_adapter.eval()
-    makeup_adapter = makeup_adapter.to(device, dtype=weight_dtype)
+    makeup_adapter = makeup_adapter.to(device=device, dtype=weight_dtype)
 
     placeholder_token_ids = add_tokens(
         tokenizer,
@@ -271,27 +318,42 @@ def init_pipeline(pretrained_model_name_or_path, revision, variant, placeholder_
         torch_dtype=weight_dtype,
     )
 
-    # load attention processors
     if use_lora:
-        pipeline.load_lora_weights(ckpt_dir, weight_name="pytorch_lora_weights.safetensors")
+        # load attention processors
+        pipeline.load_lora_weights(ckpt_dir, weight_name="pytorch_lora_weights.safetensors", adapter_name="default")
+        print(f"Loaded lora from {ckpt_dir}")
+
+        from diffusers.loaders.peft import _SET_ADAPTER_SCALE_FN_MAPPING
+        _SET_ADAPTER_SCALE_FN_MAPPING["CustomUNet2DConditionModel"] = _SET_ADAPTER_SCALE_FN_MAPPING["UNet2DConditionModel"]
+        pipeline.set_adapters(["default"], [1.0])
+        # pipeline.unet.peft_config["default_0"].lora_alpha
+        # unet.down_blocks[1].attentions[0].transformer_blocks[0].attn2.to_q.r
+        # unet.down_blocks[1].attentions[0].transformer_blocks[0].attn2.to_q.lora_alpha
+        # unet.down_blocks[1].attentions[0].transformer_blocks[0].attn2.to_q.scaling
 
     if use_ipa:
         setup_attn_processor(pipeline.unet, attn_size=attn_size, use_ipa=use_ipa)
         load_attn_processor(pipeline.unet, os.path.join(ckpt_dir, "ipa_layers.pt"))
         pipeline.set_ip_adapter_scale(ipa_scale)
 
+    if use_ema:
+        unet_path = os.path.join(ckpt_dir, "unet_ema.pt")
+        load_ema(unet, unet_path)
+        print(f"Loaded unet ema weight from {unet_path}")
+
     pipeline.init_extra(
         style_clip=style_clip,
         makeup_adapter=makeup_adapter,
         placeholder_token_ids=placeholder_token_ids,
         clip_hidden=clip_hidden)
-    pipeline = pipeline.to(device, dtype=weight_dtype)
+    pipeline = pipeline.to(device=device, dtype=weight_dtype)
 
     return pipeline
 
 
 def main():
     args = parse_args()
+    print(args)
 
     args.data_root = os.path.normpath(args.data_root)
 
@@ -302,8 +364,8 @@ def main():
     if args.detect_face:
         face_analyser = FaceAnalyser(det_thresh=0.5, min_h=150, min_w=150,
                                      exp_ratio=args.exp_ratio, use_square=args.use_square, align=False, td_mode="3ddfa")
-        face_parser = FaceParser(mode="celebm")
 
+        face_parser = FaceParser(mode="celebm")
         face_parser.set_bg_label(['background', 'neck', 'cloth', 'rr', 'lr', 'hair', 'eyeg', 'hat', 'earr', 'neck_l', 'imouth'])
 
     attn_size = []
@@ -311,14 +373,15 @@ def main():
         attn_size = [64]
 
     pipeline = init_pipeline(args.pretrained_model_name_or_path, args.revision, args.variant,
-                             args.placeholder_token, args.num_parts, args.num_heads_part, args.use_lora,
+                             args.placeholder_token, args.num_parts, args.num_heads_part,
                              args.use_ipa, args.use_text_inv,
+                             args.use_lora, args.use_ema,
                              args.style_clip_ckpt, args.use_clip_lora, args.clip_hidden,
                              ipa_scale=args.ipa_scale, ckpt_dir=args.ckpt_dir,
                              device=device, weight_dtype=weight_dtype, attn_size=attn_size)
 
     seed = random.randint(0, np.iinfo(np.int32).max)
-    generator = torch.Generator().manual_seed(seed)
+    generator = torch.Generator(device=device).manual_seed(seed)
 
     control_scale = 1.
     num_inference_steps = 50
@@ -352,12 +415,11 @@ def main():
             img_id_file_list = sorted(os.listdir(args.data_id_path))
             img_makeup_file_list = sorted(os.listdir(args.data_makeup_path))
             for img_id_file in img_id_file_list:
+                img_id_path = os.path.join(args.data_id_path, img_id_file)
                 for img_makeup_file in img_makeup_file_list:
-                    img_id_path = os.path.join(args.data_id_path, img_id_file)
                     img_makeup_path = os.path.join(args.data_makeup_path, img_makeup_file)
-                    if os.path.isfile(img_id_path) and os.path.isfile(img_makeup_path):
-                        img_id_path_list.append(img_id_path)
-                        img_makeup_path_list.append(img_makeup_path)
+                    img_id_path_list.append(img_id_path)
+                    img_makeup_path_list.append(img_makeup_path)
     else:
         with open(args.anno_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -379,7 +441,7 @@ def main():
         img_makeup_list_2.append(img_makeup)
 
     if not args.data_name:
-        args.data_name = args.data_root.split(os.sep)[-1]
+        args.data_name = os.path.basename(args.data_root)
     out_dir_img = os.path.join(args.out_dir, args.data_name)
     os.makedirs(out_dir_img, exist_ok=True)
 
@@ -387,20 +449,20 @@ def main():
         img_id = load_image(img_id_path)
         img_makeup = load_image(img_makeup_path)
 
+        img_id_ori = img_id
+
         if args.detect_face:
             face_info, is_small_face = face_analyser.get_face_info(img_bgr=np.array(img_id)[:, :, ::-1], verbose=verbose)
             pick_idx = face_analyser.find_largest_face(face_info)
-
-            if args.use_3d:
+            img_face_id = face_info[pick_idx]["face"]
+            img_face_rgb = cv2.cvtColor(img_face_id, cv2.COLOR_BGR2RGB)
+            img_id = PIL.Image.fromarray(img_face_id[:, :, ::-1])
+            bbox_crop_id = face_info[pick_idx]["bbox_crop"]
+            if args.geo_mode == "3d":
                 img_pose = face_info[pick_idx]["face_3d"]
-            else:
-                img_pose = face_analyser.get_lms_image(face_info[pick_idx]["landmark_3d_68"][:, :2],
-                                                       img_id.size[1], img_id.size[0],
-                                                       bbox=face_info[pick_idx]["bbox_crop"],
-                                                       image=np.array(img_id), verbose=verbose)
-            img_id = PIL.Image.fromarray(face_info[pick_idx]["face"][:, :, ::-1])
+            elif args.geo_mode == "keypoint":
+                img_pose = face_analyser.get_lms_image(face_info[pick_idx]["landmark_68_face"], img_face_id.shape[0], img_face_id.shape[1])
 
-            img_face_rgb = cv2.cvtColor(face_info[pick_idx]["face"], cv2.COLOR_BGR2RGB)
             face_info_face = copy.deepcopy(face_info)
             for info, info_face in zip(face_info, face_info_face):
                 info_face["bbox"] = info["bbox_face"]
@@ -423,9 +485,9 @@ def main():
         else:
             img_id_name = os.path.splitext(os.path.basename(img_id_path))[0]
 
-            if args.use_3d:
+            if args.geo_mode == "3d":
                 img_pose_path = os.path.join(args.data_root, "3d", "{}.png".format(img_id_name))
-            else:
+            elif args.geo_mode == "keypoint":
                 img_pose_path = os.path.join(args.data_root, "pose", "{}.png".format(img_id_name))
             img_pose = load_image(img_pose_path)
 
@@ -445,7 +507,7 @@ def main():
         if len(img_makeup_list_2) > 0:
             img_makeup = [img_makeup] + img_makeup_list_2
 
-        image = pipeline(
+        img_out = pipeline(
             prompt=args.validation_prompt,
             image=img_id,
             mask_image=face_mask_blurred,
@@ -462,21 +524,25 @@ def main():
 
         img_id_name = os.path.splitext(os.path.basename(img_id_path))[0]
         img_makeup_name = os.path.splitext(os.path.basename(img_makeup_path))[0]
-        image.save(os.path.join(out_dir_img, "{}-{}.png".format(img_id_name, img_makeup_name)))
+        img_out.save(os.path.join(out_dir_img, "{}-{}.png".format(img_id_name, img_makeup_name)))
 
-        if args.vis_cat:
-            image_cat = []
+        if args.detect_face:
+            paste_back_crop(img_id_ori, img_out, bbox_crop_id, use_mask=True,
+                            out_path=os.path.join(out_dir_img, "paste", "{}-{}.png".format(img_id_name, img_makeup_name)))
+
+        if args.vis_all:
+            image_all = []
             if img_id is not None:
-                image_cat += [img_id]
+                image_all += [img_id]
 
             if isinstance(img_makeup, list):
-                image_cat += img_makeup
+                image_all += img_makeup
             else:
-                image_cat += [img_makeup]
+                image_all += [img_makeup]
 
-            image_cat += [image]
+            image_all += [img_out]
 
-            concatenate_images(image_cat, os.path.join(out_dir_img, "{}-{}-cat.jpg".format(img_id_name, img_makeup_name)))
+            concatenate_images(image_all, os.path.join(out_dir_img, "{}-{}-all.jpg".format(img_id_name, img_makeup_name)))
 
         if args.vis_attn:
             vis_attn_map(np.array(img_id)[:, :, ::-1], pipeline.unet, args.validation_prompt, pipeline.tokenizer, pipeline.placeholder_token_ids,

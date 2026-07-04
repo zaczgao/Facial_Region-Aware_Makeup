@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --qos=normal                # priority (highest,normal)
-#SBATCH --partition=andrena
+#SBATCH --partition=andrena    # gpu, andrena
 #SBATCH --account=pilot_andrena
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:2            # number of GPUs per node
@@ -29,7 +29,7 @@ if [[ $SERVER == "qmul" ]]; then
   module load cudnn/8.9.7.29-11-cuda-11.8.0-gcc-12.2.0
   module load miniforge
 elif [[ $SERVER == "huawei" ]]; then
-  module load cuda/12.4
+  module load cuda/12.8
 else
   echo "Unknown SERVER: $SERVER" >&2
   exit 1
@@ -61,7 +61,8 @@ export MASTER_ADDR=$master_addr
 
 
 ## train encoder layer
-#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- ./train_style_clip.py \
+#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- \
+#  ./train_style_clip.py \
 #  --train-data=${DATA_TRAIN} --train-anno=${ANNO_TRAIN} \
 #  --val-data=${DATA_VAL} --val-anno=${ANNO_VAL} \
 #  --memory-data=${DATA_TRAIN} --memory-anno=${ANNO_TRAIN} \
@@ -69,7 +70,7 @@ export MASTER_ADDR=$master_addr
 #  --model="vit_large" --model_text="vit_giant" --use-bn-sync --name="vit_style_clip" \
 #  --lock-image --lock-image-unlocked-groups=1 --lock-image-freeze-bn-stats \
 #  --warmup=1000 --batch-size=512 --epochs=50 --accum-freq=1 \
-#  --lr=1e-05 --lr-head=2e-05 --wd=0.2 --lr-scheduler=cosine \
+#  --lr=1e-5 --lr-head=2e-5 --wd=0.2 --lr-scheduler=cosine \
 #  --lambda_ssl=1. --lambda_sup=0. --lambda_text=0.1 \
 #  --precision=amp \
 #  --workers=8 \
@@ -78,14 +79,15 @@ export MASTER_ADDR=$master_addr
 #  2>&1 | tee ./style-clip-train-${NOW}.txt
 #
 ## test on synthetic data
-#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- ./train_style_clip.py \
+#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- \
+#  ./train_style_clip.py \
 #  --val-data=${VAL_DATA_VAL} --val-anno=${VAL_ANNO_VAL} \
 #  --memory-data=${VAL_DATA_TRAIN} --memory-anno=${VAL_ANNO_TRAIN} \
 #  --dataset-type="style" \
 #  --model="vit_large" --model_text="vit_giant" --use-bn-sync --name="vit_style_clip-test" \
 #  --lock-image --lock-image-unlocked-groups=1 --lock-image-freeze-bn-stats \
 #  --warmup=1000 --batch-size=512 --epochs=50 --accum-freq=1 \
-#  --lr=1e-05 --lr-head=2e-05 --wd=0.2 --lr-scheduler=cosine \
+#  --lr=1e-5 --lr-head=2e-5 --wd=0.2 --lr-scheduler=cosine \
 #  --precision=amp \
 #  --logs=${OUT_DIR} \
 #  --resume=${OUT_DIR}/vit_style_clip/checkpoints/epoch_50.pt \
@@ -93,8 +95,9 @@ export MASTER_ADDR=$master_addr
 
 
 # train lora
-#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- ./train_style_clip.py \
-srun --cpu_bind=v --accel-bind=gn python -u ./train_style_clip.py \
+#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- \
+srun -u --cpu_bind=v --accel-bind=gn python -u \
+  ./train_style_clip.py \
   --train-data=${DATA_TRAIN} --train-anno=${ANNO_TRAIN} \
   --val-data=${DATA_VAL} --val-anno=${ANNO_VAL} \
   --memory-data=${DATA_TRAIN} --memory-anno=${ANNO_TRAIN} \
@@ -102,7 +105,7 @@ srun --cpu_bind=v --accel-bind=gn python -u ./train_style_clip.py \
   --model="vit_large" --model_text="vit_giant" --use-bn-sync --name="vit_style_clip" \
   --lock-image-unlocked-groups=1 --lock-image-freeze-bn-stats \
   --warmup=1000 --batch-size=256 --epochs=50 --accum-freq=2 \
-  --lr=1e-05 --lr-head=2e-05 --wd=0.2 --lr-scheduler=cosine \
+  --lr=1e-5 --lr-head=2e-5 --wd=0.2 --lr-scheduler=cosine \
   --lambda_ssl=1. --lambda_sup=0. --lambda_text=0.1 \
   --precision=amp \
   --workers=8 \
@@ -111,15 +114,16 @@ srun --cpu_bind=v --accel-bind=gn python -u ./train_style_clip.py \
   2>&1 | tee ./style-clip-train-${NOW}.txt
 
 # test on synthetic data
-#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- ./train_style_clip.py \
-srun --cpu_bind=v --accel-bind=gn python -u ./train_style_clip.py \
+#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- \
+srun -u --cpu_bind=v --accel-bind=gn python -u \
+  ./train_style_clip.py \
   --val-data=${VAL_DATA_VAL} --val-anno=${VAL_ANNO_VAL} \
   --memory-data=${VAL_DATA_TRAIN} --memory-anno=${VAL_ANNO_TRAIN} \
   --dataset-type="style" \
   --model="vit_large" --model_text="vit_giant" --use-bn-sync --name="vit_style_clip-test" \
   --lock-image-unlocked-groups=1 --lock-image-freeze-bn-stats \
   --warmup=1000 --batch-size=512 --epochs=50 --accum-freq=1 \
-  --lr=1e-05 --lr-head=2e-05 --wd=0.2 --lr-scheduler=cosine \
+  --lr=1e-5 --lr-head=2e-5 --wd=0.2 --lr-scheduler=cosine \
   --precision=amp \
   --logs=${OUT_DIR} \
   --resume=${OUT_DIR}/vit_style_clip/checkpoints/epoch_50.pt \

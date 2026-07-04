@@ -28,6 +28,10 @@ from utils.misc import set_trainable_modules_to_train
 # - up blocks (3x up blocks) * (3x attention blocks) * (1x transformer layers) = 9
 # => 16*2 layers including self and cross attention
 class CustomUNet2DConditionModel(UNet2DConditionModel):
+    _keep_in_fp32_modules = [
+        "norm",
+    ]
+
     def train(self, mode: bool = True):
         super().train(False)
 

@@ -32,19 +32,18 @@ from utils.tps import TPSDeform
 from utils.vis_utils import show_result
 
 
-def prepare_face_makeup_style(args):
+def prep_face(args):
     verbose = True if sys.platform == 'win32' else False
-    extensions = (".jpg", ".jpeg", ".png", ".bmp", ".tiff")
-
-    img_path_list = glob.glob(args.data_dir + "/*.png") + glob.glob(args.data_dir + "/*/*.png")
-    img_path_list = sorted(img_path_list)
-    print("Found {} face images at {}".format(len(img_path_list), args.data_dir))
 
     face_analyser = FaceAnalyser(det_thresh=args.det_thresh, min_h=args.min_h, min_w=args.min_w,
                                  exp_ratio=args.exp_ratio, use_square=args.use_square,
                                  align=args.align, image_size=args.image_size, td_mode="3ddfa")
     face_parser = FaceParser()
     tps_deform = TPSDeform()
+    
+    img_path_list = glob.glob(args.data_dir + "/*.png") + glob.glob(args.data_dir + "/*/*.png")
+    img_path_list = sorted(img_path_list)
+    print("Found {} face images at {}".format(len(img_path_list), args.data_dir))
 
     no_face_list = []
     small_face_list = []
@@ -64,17 +63,18 @@ def prepare_face_makeup_style(args):
 
         if len(face_info) == 0:
             if is_small_face:
-                print("small faces found for {}".format(img_path))
+                print("small faces at {}".format(img_path))
                 small_face_list.append(img_path)
             else:
-                print("no faces found for {}".format(img_path))
+                print("no faces at {}".format(img_path))
                 no_face_list.append(img_path)
         else:
             pick_idx = face_analyser.find_largest_face(face_info)
-            img_face_rgb = cv2.cvtColor(face_info[pick_idx]["face"], cv2.COLOR_BGR2RGB)
+            img_face = face_info[pick_idx]["face"]
+            img_face_rgb = cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB)
 
             out_path_file = os.path.join(out_dir_img, "{}.png".format(img_name))
-            cv2.imwrite(out_path_file, face_info[pick_idx]["face"])
+            cv2.imwrite(out_path_file, img_face)
 
             if args.data_dir2:
                 sub_data_dir = os.path.join(args.data_dir2, img_name)
@@ -96,49 +96,45 @@ def prepare_face_makeup_style(args):
             # img_face_warped = tps_deform(PIL.Image.fromarray(face_info[pick_idx]["face"][:, :, ::-1]),
             #                                      face_info[pick_idx]["landmark_68_face"][:, :2], verbose=verbose)
 
-            if args.use_face_data:
-                # lms68
-                out_dir_lms68 = os.path.join(args.out_dir, "lms68", relative_path)
-                os.makedirs(out_dir_lms68, exist_ok=True)
-                out_path_file = os.path.join(out_dir_lms68, "{}.npy".format(img_name))
-                np.save(out_path_file, face_info[pick_idx]["landmark_68_face"])
+            # lms68
+            out_dir_lms68 = os.path.join(args.out_dir, "lms68", relative_path)
+            os.makedirs(out_dir_lms68, exist_ok=True)
+            out_path_file = os.path.join(out_dir_lms68, "{}.npy".format(img_name))
+            np.save(out_path_file, face_info[pick_idx]["landmark_68_face"])
 
-                # face recognition embedding
-                # out_dir_emb = os.path.join(args.out_dir, "face_emb", relative_path)
-                # os.makedirs(out_dir_emb, exist_ok=True)
-                # out_file = os.path.join(out_dir_emb, "{}.npy".format(img_name))
-                # np.save(out_file, face_info[pick_idx]["face_emb"])
+            # face recognition embedding
+            # out_dir_emb = os.path.join(args.out_dir, "face_emb", relative_path)
+            # os.makedirs(out_dir_emb, exist_ok=True)
+            # out_file = os.path.join(out_dir_emb, "{}.npy".format(img_name))
+            # np.save(out_file, face_info[pick_idx]["face_emb"])
 
-                # landmark image
-                img_face_lms = face_analyser.get_lms_image(face_info[pick_idx]["landmark_3d_68"][:, :2],
-                                                           img_bgr.shape[0], img_bgr.shape[1],
-                                                           bbox=face_info[pick_idx]["bbox_crop"],
-                                                           image=img_bgr, verbose=verbose)
-                out_dir_pose = os.path.join(args.out_dir, "pose", relative_path)
-                os.makedirs(out_dir_pose, exist_ok=True)
-                out_path_file = os.path.join(out_dir_pose, "{}.png".format(img_name))
-                img_face_lms.save(out_path_file)
+            # landmark image
+            img_face_lms = face_analyser.get_lms_image(face_info[pick_idx]["landmark_68_face"], img_face.shape[0], img_face.shape[1])
+            out_dir_pose = os.path.join(args.out_dir, "pose", relative_path)
+            os.makedirs(out_dir_pose, exist_ok=True)
+            out_path_file = os.path.join(out_dir_pose, "{}.png".format(img_name))
+            img_face_lms.save(out_path_file)
 
-                # 3d image
-                out_dir_3d = os.path.join(args.out_dir, "3d", relative_path)
-                os.makedirs(out_dir_3d, exist_ok=True)
-                out_file = os.path.join(out_dir_3d, "{}.png".format(img_name))
-                face_info[pick_idx]["face_3d"].save(out_file)
+            # 3d image
+            out_dir_3d = os.path.join(args.out_dir, "3d", relative_path)
+            os.makedirs(out_dir_3d, exist_ok=True)
+            out_file = os.path.join(out_dir_3d, "{}.png".format(img_name))
+            face_info[pick_idx]["face_3d"].save(out_file)
 
-                # segmentation mask
-                face_info_face = copy.deepcopy(face_info)
-                for info, info_face in zip(face_info, face_info_face):
-                    info_face["bbox"] = info["bbox_face"]
-                    info_face["kps"] = info["kps_face"]
-                seg_masks, seg_masks_dilate, face_mask, pick_idx = \
-                    face_parser.get_face_seg(img_face_rgb, face_info_face, verbose=verbose)
-                out_dir_mask = os.path.join(args.out_dir, "mask", relative_path)
-                os.makedirs(out_dir_mask, exist_ok=True)
-                out_path_file = os.path.join(out_dir_mask, "{}.pt".format(img_name))
+            # segmentation mask
+            face_info_face = copy.deepcopy(face_info)
+            for info, info_face in zip(face_info, face_info_face):
+                info_face["bbox"] = info["bbox_face"]
+                info_face["kps"] = info["kps_face"]
+            seg_masks, seg_masks_dilate, face_mask, pick_idx = \
+                face_parser.get_face_seg(img_face_rgb, face_info_face, verbose=verbose)
+            out_dir_mask = os.path.join(args.out_dir, "mask", relative_path)
+            os.makedirs(out_dir_mask, exist_ok=True)
+            out_path_file = os.path.join(out_dir_mask, "{}.pt".format(img_name))
 
-                seg_preds_dilate = face_parser.get_pred_from_mask(seg_masks_dilate)
-                mask_dict = {"seg_pred": seg_preds_dilate[pick_idx].to(torch.uint8)}
-                torch.save(mask_dict, out_path_file)
+            seg_preds_dilate = face_parser.get_pred_from_mask(seg_masks_dilate)
+            mask_dict = {"seg_pred": seg_preds_dilate[pick_idx].to(torch.uint8)}
+            torch.save(mask_dict, out_path_file)
 
     print("{} faces not found".format(len(no_face_list)))
     print("{} small faces".format(len(small_face_list)))
@@ -152,13 +148,12 @@ if __name__ == '__main__':
     parser.add_argument('--det_thresh', default=0.5, type=float, help='det_thresh')
     parser.add_argument('--min_h', default=250, type=int, help='min height')
     parser.add_argument('--min_w', default=250, type=int, help='min width')
-    parser.add_argument('--exp_ratio', default=0.4, type=float, help='')
+    parser.add_argument('--exp_ratio', default=0.25, type=float, help='')
     parser.add_argument("--use_square", type=int, default=1)
     parser.add_argument('--align', default=0, type=int, help='align face image')
     parser.add_argument('--image_size', default=256, type=int, help='aligned image size')
-    parser.add_argument('--use_face_data', default=0, type=int, help='')
     args = parser.parse_args()
 
     print(args)
 
-    prepare_face_makeup_style(args)
+    prep_face(args)

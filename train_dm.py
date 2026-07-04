@@ -42,17 +42,17 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from peft import LoraConfig
-from peft.utils import get_peft_model_state_dict
+from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
 # from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, DDIMScheduler
 from diffusers.optimization import get_scheduler
-from diffusers.training_utils import cast_training_params, compute_snr
-from diffusers.utils import check_min_version, convert_state_dict_to_diffusers, is_wandb_available
+from diffusers.training_utils import cast_training_params, compute_snr, free_memory, _collate_lora_metadata
+from diffusers.utils import check_min_version, convert_state_dict_to_diffusers, convert_unet_state_dict_to_peft, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
-
+from diffusers.loaders import AttnProcsLayers
 
 if is_wandb_available():
     import wandb
@@ -63,16 +63,18 @@ if is_wandb_available():
 from dm.multi_token_clip import MultiTokenCLIPTokenizer
 from dm.text_encoder import CustomCLIPTextModel
 from dm.unet import CustomUNet2DConditionModel
-from dm.attn_proc import setup_attn_processor
+from dm.attn_proc import setup_attn_processor, load_attn_processor
 from dm.makeup_adapter import MakeupAdapter
 from dm.tokenizer import add_tokens
 from dm.losses import calc_attn_loss
 from dm.data import MakeupDataset, collate_fn, get_dataset_cls
 from dm.pipeline import MakeupSDPipeline
+from dm.ema import EMAModuleWrapper
+from dm.dm_utils import corrupt_latent
 from style_clip.model import StyleCLIP
 from style_clip import clip_utils
 from test_dm import init_pipeline
-from utils.misc import load_image, compare_model_params
+from utils.misc import load_image, compare_model_param
 from utils.vis_utils import show_result, concatenate_images
 
 logger = get_logger(__name__, log_level="INFO")
@@ -85,12 +87,17 @@ def load_pretrain(
         map_location=None
 ):
     if os.path.isdir(pretrain_dir):
-        # unet.load_state_dict(torch.load(os.path.join(pretrain_dir, 'unet.pt'), map_location=map_location))
+        # state_dict = torch.load(os.path.join(pretrain_dir, 'unet.pt'), map_location=map_location)
+        # state_unet = unet.state_dict()
+        # for key in state_unet.keys():
+        #     # assert torch.equal(state_unet[key], state_dict[key])
+        #     assert torch.isclose(state_unet[key], state_dict[key]).all().item()
 
-        state_dict = torch.load(os.path.join(pretrain_dir, 'makeup_adapter.pt'), map_location=map_location)
-        makeup_adapter.control_id.load_state_dict(state_dict['control_id'])
+        state_dict = torch.load(os.path.join(pretrain_dir, "adapter.pt"), map_location=map_location)
+        for key in state_dict.keys():
+            getattr(makeup_adapter, key).load_state_dict(state_dict[key])  # control_id
 
-        logger.info(f"Loaded adapter pretrained models from {pretrain_dir}")
+        logger.info(f"Loaded pretrained models from {pretrain_dir}")
     else:
         logger.info(f"No pretrained models found at {pretrain_dir}")
 
@@ -100,8 +107,8 @@ def log_validation(
     args,
     accelerator,
     epoch,
+    torch_dtype,
     is_final_validation=False,
-    verbose=False
 ):
     logger.info(
         f"Running validation epoch {epoch}... \n Generating {args.num_validation_images} images with prompt:"
@@ -109,18 +116,13 @@ def log_validation(
     )
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
-    generator = torch.Generator(device=accelerator.device)
-    if args.seed is not None:
-        generator = generator.manual_seed(args.seed)
-    images = []
-    if torch.backends.mps.is_available():
-        autocast_ctx = nullcontext()
-    else:
-        autocast_ctx = torch.autocast(accelerator.device.type)
+
+    generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed is not None else None
+    autocast_ctx = torch.autocast(accelerator.device.type, dtype=torch_dtype) if not is_final_validation else nullcontext()
 
     control_scale = 1.
     num_inference_steps = 50
-    guidance_scale = 7.5
+    guidance_scale = 5.5
     num_pair = 100
 
     img_id_path_list, img_makeup_path_list = [], []
@@ -139,15 +141,16 @@ def log_validation(
         val_out_dir = os.path.join(args.output_dir, "validation", f"epoch-{epoch:03d}")
     os.makedirs(val_out_dir, exist_ok=True)
 
+    images = []
     with autocast_ctx:
         for idx, (img_id_path, img_makeup_path) in enumerate(zip(img_id_path_list, img_makeup_path_list)):
             img_id = load_image(img_id_path)
             img_makeup = load_image(img_makeup_path)
 
             img_id_name = os.path.splitext(os.path.basename(img_id_path))[0]
-            if args.use_3d:
+            if args.geo_mode == "3d":
                 img_pose_path = os.path.join(args.val_data_root, "3d", "{}.png".format(img_id_name))
-            else:
+            elif args.geo_mode == "keypoint":
                 img_pose_path = os.path.join(args.val_data_root, "pose", "{}.png".format(img_id_name))
             img_pose = load_image(img_pose_path)
 
@@ -487,8 +490,7 @@ def parse_args():
         help="The image interpolation method to use for resizing images.",
     )
 
-    parser.add_argument("--log_frequency", type=int, default=100, help="")
-
+    # model
     parser.add_argument("--stage1_pretrain_dir", type=str, default="")
     parser.add_argument("--style_clip_ckpt", type=str, default="")
     parser.add_argument("--use_clip_lora", type=int, default=0, help="Use clip lora layers")
@@ -501,21 +503,27 @@ def parse_args():
     parser.add_argument("--use_lora", type=int, default=0, help="Use lora for sd backbone")
     parser.add_argument("--use_ipa", type=int, default=0, help="Use ipa for makeup style")
     parser.add_argument("--use_text_inv", type=int, default=0, help="Use text inversion for makeup style")
-    parser.add_argument("--use_3d", type=int, default=0, help="Use 3d")
-    # parser.add_argument("--num_tokens", type=int, default=16, help="Number of tokens to query from the CLIP image encoding.")
+    parser.add_argument("--geo_mode", type=str, default="3d", choices=["3d", "normal", "keypoint"])
+
+    # training
+    parser.add_argument("--use_ema", type=int, default=0, help="use ema model")
     parser.add_argument("--lr_adapter", type=float, default=1e-4)
+    parser.add_argument("--weight_mask", type=float, default=0.5)
     parser.add_argument("--weight_attn", type=float, default=0.1)
+
+    # data
     parser.add_argument("--use_templates", default=False, action="store_true")
     parser.add_argument("--vector_shuffle", default=False, action="store_true", help="shuffle ph tokens")
     parser.add_argument("--drop_tokens", default=False, action="store_true")
     parser.add_argument("--drop_tokens_rate", type=float, default=0.5)
     parser.add_argument("--swap_pair_rate", type=float, default=0.1)
-    parser.add_argument("--drop_text_rate", type=float, default=0.1)
-    parser.add_argument("--drop_style_rate", type=float, default=0.05)
-    parser.add_argument("--drop_all_rate", type=float, default=0.05)
+    parser.add_argument("--drop_p_text", type=float, default=0.1)
+    parser.add_argument("--drop_p_style", type=float, default=0.05)
+    parser.add_argument("--drop_p_all", type=float, default=0.05)
 
     parser.add_argument("--val_data_root", type=str, default="")
     parser.add_argument("--val_anno_path", type=str, default="")
+    parser.add_argument("--log_frequency", type=int, default=100, help="")
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -527,6 +535,12 @@ def parse_args():
         raise ValueError("Need either a dataset name or a training folder.")
 
     return args
+
+
+def unwrap_model(accelerator: Accelerator, model):
+    model = accelerator.unwrap_model(model)
+    model = model._orig_mod if is_compiled_module(model) else model
+    return model
 
 
 def main():
@@ -635,6 +649,7 @@ def main():
     text_encoder.requires_grad_(False)
     style_clip.requires_grad_(False)
     style_clip.eval()
+    makeup_adapter.requires_grad_(True)
 
     if args.use_lora:
         # peft/tuners/lora/model.py _replace_module
@@ -642,22 +657,38 @@ def main():
             r=args.rank,
             lora_alpha=args.lora_alpha,
             init_lora_weights="gaussian",
-            target_modules=["attn2.to_q", "attn2.to_k", "attn2.to_v", "attn2.to_out.0"],
-            # target_modules=["attn2.to_q", "attn2.to_k", "attn2.to_v"],
+            # target_modules=["attn2.to_q", "attn2.to_k", "attn2.to_v", "attn2.to_out.0"],
+            target_modules=["attn2.to_q", "attn2.to_out.0"],
         )
 
         # Add adapter and make sure the trainable params are in float32.
-        unet.add_adapter(unet_lora_config)
+        unet.add_adapter(unet_lora_config, adapter_name="default")
+        # unet_lora_adapter_metadata = unet_lora_config.to_dict()
 
     attn_size = [int(a) for a in args.attn_size.split(",")]
     ipa_attn_params, ipa_attn_layers = setup_attn_processor(unet, attn_size=attn_size, use_ipa=args.use_ipa)
+
+    if args.stage1_pretrain_dir:
+        load_pretrain(unet, makeup_adapter, args.stage1_pretrain_dir, map_location='cpu')
+
+    if args.use_ema:
+        # https://github.com/yifan123/flow_grpo
+        ema_decay = 0.99
+
+        unet_ema_names = [n for n, p in unet.named_parameters() if p.requires_grad]
+        unet_ema_parameters = [p for n, p in unet.named_parameters() if p.requires_grad]
+        ema_unet = EMAModuleWrapper(unet_ema_parameters, unet_ema_names,
+                                    decay=ema_decay, update_step_interval=1, device=accelerator.device)
+
+        adapter_ema_names = [n for n, p in makeup_adapter.named_parameters() if p.requires_grad]
+        adapter_ema_parameters = [p for n, p in makeup_adapter.named_parameters() if p.requires_grad]
+        ema_adapter = EMAModuleWrapper(adapter_ema_parameters, adapter_ema_names,
+                                    decay=ema_decay, update_step_interval=1, device=accelerator.device)
+
     # unet.down_blocks[1].attentions[0].transformer_blocks
     if accelerator.is_main_process:
         print(unet)
         print(makeup_adapter)
-
-    if args.stage1_pretrain_dir:
-        load_pretrain(unet, makeup_adapter, args.stage1_pretrain_dir, map_location='cpu')
 
     # For mixed precision training we cast all non-trainable weights (vae, non-lora text_encoder and non-lora unet) to half-precision
     # as these weights are only used for inference, keeping weights in full precision is not required.
@@ -669,13 +700,17 @@ def main():
 
     # Move unet, vae and text_encoder to device and cast to weight_dtype
     # unet.to(accelerator.device, dtype=weight_dtype)
+    for name, param in unet.named_parameters():
+        should_keep_fp32 = any(pattern in name for pattern in unet.__class__._keep_in_fp32_modules)
+        param.data = param.to(torch.float32 if should_keep_fp32 else weight_dtype)
     unet.to(accelerator.device)
+
     vae.to(accelerator.device, dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
-    style_clip.to(accelerator.device, dtype=weight_dtype)
+    style_clip.to(accelerator.device)
     makeup_adapter.to(accelerator.device)
 
-    if args.mixed_precision == "fp16":
+    if accelerator.mixed_precision in ["fp16", "bf16"]:
         # only upcast trainable parameters (LoRA) into fp32
         cast_training_params(unet, dtype=torch.float32)
 
@@ -698,35 +733,76 @@ def main():
     # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
     def save_model_hook(models, weights, output_dir):
         if accelerator.is_main_process:
-            for i, model in enumerate(models):
-                if isinstance(model, CustomUNet2DConditionModel):
-                    torch.save(model.state_dict(), os.path.join(output_dir, 'unet.pt'))
+            for model in models:
+                if isinstance(unwrap_model(accelerator, model), type(unwrap_model(accelerator, unet))):
+                    model = unwrap_model(accelerator, model)
 
                     if args.use_lora:
-                        unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(unwrap_model(model)))
+                        lora_to_save = {"unet": model}
+                        unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(model))
                         StableDiffusionPipeline.save_lora_weights(
                             save_directory=output_dir,
                             unet_lora_layers=unet_lora_state_dict,
+                            weight_name="pytorch_lora_weights.safetensors",
                             safe_serialization=True,
+                            **_collate_lora_metadata(lora_to_save),
                         )
 
                     if args.use_ipa:
-                        torch.save(ipa_attn_layers.state_dict(), os.path.join(output_dir, "ipa_layers.pt"))
-                elif isinstance(model, MakeupAdapter):
-                    model.save_checkpoint(os.path.join(output_dir, 'makeup_adapter.pt'))
+                        attn_procs_layers = AttnProcsLayers(model.attn_processors)
+                        torch.save(attn_procs_layers.state_dict(), os.path.join(output_dir, "ipa_layers.pt"))
+                elif isinstance(unwrap_model(accelerator, model), type(unwrap_model(accelerator, makeup_adapter))):
+                    unwrap_model(accelerator, model).save_checkpoint(os.path.join(output_dir, "adapter.pt"))
+                else:
+                    raise ValueError(f"unexpected save model: {model.__class__}")
 
                 # make sure to pop weight so that corresponding model is not saved again
                 weights.pop()
 
     def load_model_hook(models, input_dir):
-        for _ in range(len(models)):
+        unet_ = None
+        makeup_adapter_ = None
+
+        while len(models) > 0:
             # pop models so that they are not loaded again
             model = models.pop()
 
-            if isinstance(model, CustomUNet2DConditionModel):
-                model.load_state_dict(torch.load(os.path.join(input_dir, 'unet.pt'), map_location='cpu'))
-            elif isinstance(model, MakeupAdapter):
-                model.load_from_checkpoint(os.path.join(input_dir, 'makeup_adapter.pt'))
+            if isinstance(unwrap_model(accelerator, model), type(unwrap_model(accelerator, unet))):
+                unet_ = unwrap_model(accelerator, model)
+            elif isinstance(unwrap_model(accelerator, model), type(unwrap_model(accelerator, makeup_adapter))):
+                makeup_adapter_ = unwrap_model(accelerator, model)
+            else:
+                raise ValueError(f"unexpected save model: {model.__class__}")
+
+        if args.use_lora:
+            # returns a tuple of state dictionary and network alphas
+            lora_state_dict, network_alphas = StableDiffusionPipeline.lora_state_dict(input_dir)
+
+            unet_state_dict = {f"{k.replace('unet.', '')}": v for k, v in lora_state_dict.items() if
+                               k.startswith("unet.")}
+            unet_state_dict = convert_unet_state_dict_to_peft(unet_state_dict)
+            incompatible_keys = set_peft_model_state_dict(unet_, unet_state_dict, adapter_name="default")
+
+            if incompatible_keys is not None:
+                # check only for unexpected keys
+                unexpected_keys = getattr(incompatible_keys, "unexpected_keys", None)
+                # throw warning if some unexpected keys are found and continue loading
+                if unexpected_keys:
+                    logger.warning(
+                        f"Loading adapter weights from state_dict led to unexpected keys not found in the model: "
+                        f" {unexpected_keys}. "
+                    )
+
+        if args.use_ipa:
+            load_attn_processor(unet_, os.path.join(input_dir, "ipa_layers.pt"))
+
+        makeup_adapter_.load_from_checkpoint(os.path.join(input_dir, "adapter.pt"))
+
+        # Make sure the trainable params are in float32. This is again needed since the base models
+        # are in `weight_dtype`. More details:
+        # https://github.com/huggingface/diffusers/pull/6514#discussion_r1449796804
+        if accelerator.mixed_precision in ["fp16", "bf16"]:
+            cast_training_params([unet_, makeup_adapter_], dtype=torch.float32)
 
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)
@@ -761,11 +837,25 @@ def main():
     else:
         optimizer_cls = torch.optim.AdamW
 
-    unet_params = [p for p in unet.parameters() if p.requires_grad]
-    adapter_params = [p for p in makeup_adapter.parameters() if p.requires_grad]
+    train_params = []
+    train_params += [p for p in unet.parameters() if p.requires_grad]
+    train_params += [p for p in makeup_adapter.parameters() if p.requires_grad]
+
+    base_params, other_params = [], []
+    for n, p in unet.named_parameters():
+        if p.requires_grad:
+            other_params.append(p)
+    for n, p in makeup_adapter.named_parameters():
+        if p.requires_grad:
+            if n.startswith("control_id."):
+                base_params.append(p)
+            elif n.startswith("style_proj."):
+                other_params.append(p)
+    assert len(base_params) + len(other_params) == len(train_params)
+
     opt_params = [
-        {"params": unet_params},
-        {"params": adapter_params, "lr": args.lr_adapter},
+        {"params": base_params},
+        {"params": other_params, "lr": args.lr_adapter},
     ]
 
     optimizer = optimizer_cls(
@@ -787,13 +877,8 @@ def main():
     dataset_cls = get_dataset_cls(args.dataset_name)
     train_dataset = dataset_cls(args.train_data_dir, args.resolution, args.center_crop, args.random_flip,
                                 tokenizer, base_prompt, args.use_templates, args.vector_shuffle, args.drop_tokens, args.drop_tokens_rate,
-                                args.swap_pair_rate, [args.drop_text_rate, args.drop_style_rate, args.drop_all_rate],
-                                args.skip_background, args.num_parts, args.use_3d)
-
-    def unwrap_model(model):
-        model = accelerator.unwrap_model(model)
-        model = model._orig_mod if is_compiled_module(model) else model
-        return model
+                                args.swap_pair_rate, [args.drop_p_text, args.drop_p_style, args.drop_p_all],
+                                args.skip_background, args.num_parts, args.geo_mode)
 
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
@@ -883,6 +968,10 @@ def main():
 
             initial_global_step = global_step
             first_epoch = global_step // num_update_steps_per_epoch
+
+            if args.use_ema:
+                ema_unet.load_state_dict(torch.load(os.path.join(args.output_dir, path, "unet_ema.pt"), map_location='cpu'))
+                ema_adapter.load_state_dict(torch.load(os.path.join(args.output_dir, path, "adapter_ema.pt"), map_location='cpu'))
     else:
         initial_global_step = 0
 
@@ -894,11 +983,11 @@ def main():
         disable=not accelerator.is_local_main_process,
     )
 
-
-    null_text_input_ids = tokenizer(
-        "", max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
-    ).input_ids
-    null_text_embeds = text_encoder(null_text_input_ids.to(accelerator.device))[0]
+    with torch.no_grad():
+        null_text_input_ids = tokenizer(
+            "", max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+        ).input_ids
+        null_text_embeds = text_encoder(null_text_input_ids.to(accelerator.device))[0]
 
     for epoch in range(first_epoch, args.num_train_epochs):
         unet.train()
@@ -933,6 +1022,9 @@ def main():
 
                 _, style_feat, _, _ = style_clip.get_image_feat(batch["style_pixel_values"],
                                                                 hidden_layer_idx=args.clip_hidden)
+                style_feat = style_feat.to(dtype=weight_dtype)
+
+                # style_feat = corrupt_latent(style_feat, corrupt_prob=[0, 0.1])
 
                 face_cond = [batch["id_pixel_values"].to(dtype=weight_dtype),
                              batch["pose_pixel_values"].to(dtype=weight_dtype),
@@ -943,6 +1035,16 @@ def main():
                 encoder_hidden_states, down_block_res_samples, mid_block_res_sample = \
                     makeup_adapter(noisy_latents, timesteps, batch["input_ids"], text_encoder,
                                    placeholder_token_ids, style_feat, batch["is_drop_style"], face_cond)
+
+                # Predict the noise residual and compute loss
+                model_pred = unet(noisy_latents,
+                                  timesteps,
+                                  encoder_hidden_states=encoder_hidden_states,
+                                  down_block_additional_residuals=[
+                                      sample.to(dtype=weight_dtype) for sample in down_block_res_samples
+                                  ],
+                                  mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype),
+                                  return_dict=False)[0]
 
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
@@ -956,39 +1058,8 @@ def main():
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                # Predict the noise residual and compute loss
-                model_pred = unet(noisy_latents,
-                                  timesteps,
-                                  encoder_hidden_states=encoder_hidden_states,
-                                  down_block_additional_residuals=[
-                                      sample.to(dtype=weight_dtype) for sample in down_block_res_samples
-                                  ],
-                                  mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype),
-                                  return_dict=False)[0]
-
                 if args.snr_gamma is None:
-                    loss_diff = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
-                    # Scale-Robust and Fine-Controllable Identity Customization via Local and Global Complementation
-                    # follow-your-emoji
-                    face_mask = batch["face_mask"].unsqueeze(1).to(latents.device)
-                    face_mask = F.interpolate(face_mask.float(), target.shape[-2:], mode="bilinear")
-                    loss_diff_face = F.mse_loss(model_pred.float(), target.float(), reduction="none")
-                    loss_diff_face = torch.mean(torch.sum(loss_diff_face * face_mask, dim=(1,2,3)) / (face_mask.sum(dim=(1,2,3)) + 1e-6))
-
-                    exp_mask = batch["exp_mask"].unsqueeze(1).to(latents.device)
-                    exp_mask = F.interpolate(exp_mask.float(), target.shape[-2:], mode="bilinear")
-                    loss_diff_exp = F.mse_loss(model_pred.float(), target.float(), reduction="none")
-                    loss_diff_exp = torch.mean(torch.sum(loss_diff_exp * exp_mask, dim=(1, 2, 3)) / (exp_mask.sum(dim=(1, 2, 3)) + 1e-6))
-
-                    loss_diff_mask = 0.5 * (loss_diff_face + loss_diff_exp)
-
-                    loss = 0.5 * (loss_diff + loss_diff_mask)
-
-                    loss_attn = torch.tensor(0.).to(loss.device)
-                    if args.use_ipa or args.use_text_inv:
-                        loss_attn, max_attn = calc_attn_loss(batch, unet, placeholder_token_ids, args.use_ipa,
-                                                             is_drop=batch["is_drop_style"], attn_size=attn_size)
+                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
                 else:
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
@@ -1005,6 +1076,28 @@ def main():
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
+
+                loss_diff = loss
+
+                # Scale-Robust and Fine-Controllable Identity Customization via Local and Global Complementation
+                # follow-your-emoji
+                face_mask = F.interpolate(batch["face_mask"].unsqueeze(1).float(), target.shape[-2:], mode="bilinear")
+                loss_diff_face = F.mse_loss(model_pred.float(), target.float(), reduction="none")
+                loss_diff_face = torch.mean((loss_diff_face * face_mask).sum(dim=(1,2,3)) / (face_mask.sum(dim=(1,2,3)) * target.shape[1] + 1e-6))
+
+                exp_mask = F.interpolate(batch["exp_mask"].unsqueeze(1).float(), target.shape[-2:], mode="bilinear")
+                loss_diff_exp = F.mse_loss(model_pred.float(), target.float(), reduction="none")
+                loss_diff_exp = torch.mean((loss_diff_exp * exp_mask).sum(dim=(1,2,3)) / (exp_mask.sum(dim=(1,2,3)) * target.shape[1] + 1e-6))
+
+                loss_diff_mask = 0.5 * (loss_diff_face + loss_diff_exp)
+
+                loss = (1. - args.weight_mask) * loss_diff + args.weight_mask * loss_diff_mask
+
+                loss_attn = torch.tensor(0.).to(loss.device)
+                if args.use_ipa or args.use_text_inv:
+                    loss_attn, max_attn = calc_attn_loss(batch, unet, placeholder_token_ids, args.use_ipa,
+                                                         is_drop=batch["is_drop_style"], attn_size=attn_size,
+                                                         attn_scale=0.5)
 
                 loss = loss + args.weight_attn * loss_attn
 
@@ -1024,7 +1117,7 @@ def main():
                 # Backpropagate
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    params_to_clip = unet_params + adapter_params
+                    params_to_clip = list(unet.parameters()) + list(makeup_adapter.parameters())
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
@@ -1043,6 +1136,10 @@ def main():
                 train_loss_diff = 0.0
                 train_loss_diff_mask = 0.0
                 train_loss_attn = 0.0
+
+                if args.use_ema:
+                    ema_unet.step(unet_ema_parameters, global_step)
+                    ema_adapter.step(adapter_ema_parameters, global_step)
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
@@ -1068,6 +1165,9 @@ def main():
 
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)
+                        if args.use_ema and accelerator.is_main_process:
+                            torch.save(ema_unet.state_dict(), os.path.join(save_path, "unet_ema.pt"))
+                            torch.save(ema_adapter.state_dict(), os.path.join(save_path, "adapter_ema.pt"))
 
                         # unwrapped_unet = unwrap_model(unet)
                         # unet_lora_state_dict = convert_state_dict_to_diffusers(
@@ -1082,22 +1182,18 @@ def main():
 
                         logger.info(f"Saved state to {save_path}")
 
-                if (global_step - 1) % args.log_frequency == 0 or global_step == 1 or global_step == args.max_train_steps:
-                    if global_step == 1:
-                        steps_to_update = 1
-                    elif global_step == args.max_train_steps:
-                        steps_to_update = (global_step - 1) % args.log_frequency or args.log_frequency
-                    else:
-                        steps_to_update = args.log_frequency
-
+                if global_step == 1 or global_step % args.log_frequency == 0 or global_step == args.max_train_steps:
                     logs = {"step_loss": loss.detach().item(),
                             "loss_diff": loss_diff.detach().item(),
                             "loss_diff_mask": loss_diff_mask.detach().item(),
                             "loss_attn": loss_attn.detach().item(),
                             "lr": lr_scheduler.get_last_lr()[0],
                             "lr_adapter": lr_scheduler.get_last_lr()[1]}
+
                     progress_bar.set_postfix(**logs, refresh=False)
-                    progress_bar.update(steps_to_update)
+                    steps_to_update = global_step - progress_bar.n
+                    if steps_to_update > 0:
+                        progress_bar.update(steps_to_update)
 
             if global_step >= args.max_train_steps:
                 break
@@ -1108,65 +1204,86 @@ def main():
                 scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
                 pipeline = MakeupSDPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
-                    unet=unwrap_model(unet),
-                    controlnet=unwrap_model(makeup_adapter).control_id,
+                    vae=vae,
+                    unet=unwrap_model(accelerator, unet),
+                    controlnet=unwrap_model(accelerator, makeup_adapter).control_id,
                     scheduler=scheduler,
-                    text_encoder=unwrap_model(text_encoder),
+                    text_encoder=text_encoder,
                     tokenizer=tokenizer,
                     revision=args.revision,
                     variant=args.variant,
                     torch_dtype=weight_dtype,
                 )
                 pipeline.init_extra(
-                    style_clip=unwrap_model(style_clip),
-                    makeup_adapter=unwrap_model(makeup_adapter),
+                    style_clip=style_clip,
+                    makeup_adapter=unwrap_model(accelerator, makeup_adapter),
                     placeholder_token_ids=placeholder_token_ids,
                     clip_hidden=args.clip_hidden)
 
-                images = log_validation(pipeline, args, accelerator, epoch)
+                if args.use_ema:
+                    # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
+                    ema_unet.copy_ema_to(unet_ema_parameters, store_temp=True)
+                    ema_adapter.copy_ema_to(adapter_ema_parameters, store_temp=True)
+
+                images = log_validation(pipeline, args, accelerator, epoch, torch_dtype=weight_dtype)
+
+                if args.use_ema:
+                    # Switch back to the original UNet parameters.
+                    ema_unet.copy_temp_to(unet_ema_parameters)
+                    ema_adapter.copy_temp_to(adapter_ema_parameters)
 
                 del pipeline
-                torch.cuda.empty_cache()
+                free_memory()
 
     logger.info("Training finished. Run final testing.")
 
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
+        unet = unet.to(torch.float32)
+        unet = unwrap_model(accelerator, unet)
+
+        if args.use_ema:
+            # ema_unet.copy_ema_to(unet_ema_parameters, store_temp=False)
+            # ema_adapter.copy_ema_to(adapter_ema_parameters, store_temp=False)
+            torch.save(ema_unet.state_dict(), os.path.join(args.output_dir, "unet_ema.pt"))
+            torch.save(ema_adapter.state_dict(), os.path.join(args.output_dir, "adapter_ema.pt"))
+
         if args.use_lora:
-            unet = unet.to(torch.float32)
-            unwrapped_unet = unwrap_model(unet)
-            unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(unwrapped_unet))
+            lora_to_save = {"unet": unet}
+            unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(unet))
             StableDiffusionPipeline.save_lora_weights(
                 save_directory=args.output_dir,
                 unet_lora_layers=unet_lora_state_dict,
+                weight_name="pytorch_lora_weights.safetensors",
                 safe_serialization=True,
+                **_collate_lora_metadata(lora_to_save),
             )
 
         if args.use_ipa:
             torch.save(ipa_attn_layers.to(torch.float32).state_dict(), os.path.join(args.output_dir, "ipa_layers.pt"))
 
         makeup_adapter = makeup_adapter.to(torch.float32)
-        makeup_adapter = unwrap_model(makeup_adapter)
-        makeup_adapter.save_checkpoint(os.path.join(args.output_dir, "makeup_adapter.pt"))
+        makeup_adapter = unwrap_model(accelerator, makeup_adapter)
+        makeup_adapter.save_checkpoint(os.path.join(args.output_dir, "adapter.pt"))
 
-        # del unet, makeup_adapter, optimizer, scheduler, train_dataloader
-        # torch.cuda.empty_cache()
+        del vae, text_encoder, style_clip, makeup_adapter, optimizer, lr_scheduler, train_dataloader
+        free_memory()
 
         # Final inference
         # Load previous pipeline
         if args.validation_prompt is not None:
             pipeline = init_pipeline(args.pretrained_model_name_or_path, args.revision, args.variant,
-                                     args.placeholder_token, args.num_parts, args.num_heads_part, args.use_lora,
+                                     args.placeholder_token, args.num_parts, args.num_heads_part,
                                      args.use_ipa, args.use_text_inv,
+                                     args.use_lora, args.use_ema,
                                      args.style_clip_ckpt, args.use_clip_lora, args.clip_hidden,
                                      ipa_scale=1., ckpt_dir=args.output_dir,
                                      device=accelerator.device, weight_dtype=torch.float32)
 
-            compare_model_params(unwrap_model(unet.to(torch.float32)), pipeline.unet)
-            compare_model_params(makeup_adapter, pipeline.makeup_adapter)
+            compare_model_param(unet, pipeline.unet)
 
             # run inference
-            images = log_validation(pipeline, args, accelerator, epoch, is_final_validation=True)
+            images = log_validation(pipeline, args, accelerator, epoch, torch_dtype=torch.float32, is_final_validation=True)
 
     accelerator.end_training()
 

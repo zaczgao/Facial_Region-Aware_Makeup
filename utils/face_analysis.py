@@ -14,6 +14,7 @@ line148: w_images, grid, inv_grid = self.warp_images(images, data)
 add: w_images = torch.clamp(w_images, max=1.)
 
 https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
+https://onnxruntime.ai/docs/install/#cuda-11x
 
 https://huggingface.co/CrucibleAI/ControlNetMediaPipeFace
 """
@@ -53,6 +54,56 @@ SCRIPT_DIR = os.path.dirname(abspath)
 
 from utils.model_3d import TDDFAV3, SMIRK
 from utils.vis_utils import show_result, show_face_result
+
+
+def extract_5p(lm):
+    lm_idx = np.array([31, 37, 40, 43, 46, 49, 55]) - 1
+    lm5p = np.stack([lm[lm_idx[0], :], np.mean(lm[lm_idx[[1, 2]], :], 0), np.mean(
+        lm[lm_idx[[3, 4]], :], 0), lm[lm_idx[5], :], lm[lm_idx[6], :]], axis=0)
+    lm5p = lm5p[[1, 2, 0, 3, 4], :]
+    return lm5p
+
+
+def calc_iou(bbox1, bbox2):
+    x1_min, y1_min, x1_max, y1_max = bbox1
+    x2_min, y2_min, x2_max, y2_max = bbox2
+
+    x_inter_min = max(x1_min, x2_min)
+    y_inter_min = max(y1_min, y2_min)
+    x_inter_max = min(x1_max, x2_max)
+    y_inter_max = min(y1_max, y2_max)
+
+    inter_width = max(0, x_inter_max - x_inter_min)
+    inter_height = max(0, y_inter_max - y_inter_min)
+    inter_area = inter_width * inter_height
+
+    area1 = (x1_max - x1_min) * (y1_max - y1_min)
+    area2 = (x2_max - x2_min) * (y2_max - y2_min)
+    union_area = area1 + area2 - inter_area
+
+    return inter_area / (union_area + 1e-7)
+
+
+def get_clean_mask(mask, min_size):
+    """
+    :param mask: 0, 1 uint8
+    :param min_size: min size of the mask
+    """
+    mask = mask.astype(np.uint8)
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+
+    clean_mask = np.zeros_like(mask)
+
+    for i in range(1, num_labels):  # skip background
+        area = stats[i, cv2.CC_STAT_AREA]
+
+        if area >= min_size:
+            clean_mask[labels == i] = 1
+
+    outlier_mask = (mask.astype(np.bool_) & ~clean_mask.astype(np.bool_)).astype(np.uint8)
+
+    return clean_mask, outlier_mask
 
 
 def get_patch(landmarks, color='lime', closed=False):
@@ -148,48 +199,45 @@ def add_bbox_margin(roi, h_img, w_img, exp_ratio):
     return [x1, y1, x2, y2]
 
 
-def make_bbox_square(bbox, h_img, w_img):
+def make_bbox_square(bbox, h_img, w_img, bbox_src=None, mode="large"):
     x1, y1, x2, y2 = bbox
     w_box = x2 - x1
     h_box = y2 - y1
 
-    size = min(w_box, h_box)
-    size = min(min(h_img, w_img), size)
+    center_h = int((y1 + y2) / 2)
+    center_w = int((x1 + x2) / 2)
+    if bbox_src is not None:
+        center_h_src = int((bbox_src[1] + bbox_src[3]) / 2)
+        center_w_src = int((bbox_src[0] + bbox_src[2]) / 2)
 
+    if mode == "large":
+        size = max(w_box, h_box)
+    elif mode == "small":
+        size = min(w_box, h_box)
     half_size = int((size - size % 2) // 2)
-    center_h = int(round(y1 + h_box / 2.))
-    center_w = int(round(x1 + w_box / 2.))
+    half_size_h = int((h_box - h_box % 2) // 2)
+    half_size_w = int((w_box - w_box % 2) // 2)
+
+    if bbox_src is not None:
+        offset_h = center_h_src - center_h
+        offset_w = center_w_src - center_w
+
+        center_h = center_h + offset_h
+        center_w = center_w + offset_w
+
+        center_h = min(max(half_size_h, center_h), h_img - half_size_h)
+        center_w = min(max(half_size_w, center_w), w_img - half_size_w)
+
+    dx1 = center_w
+    dx2 = w_img - center_w
+    dy1 = center_h
+    dy2 = h_img - center_h
+    half_size = min(dx1, dx2, dy1, dy2, half_size)
+
     x1 = max(center_w - half_size, 0)
     x2 = min(center_w + half_size, w_img)
     y1 = max(center_h - half_size, 0)
     y2 = min(center_h + half_size, h_img)
-
-    # half_size = int(size / 2.)
-    #
-    # # Center of the box
-    # cx = int(round(x1 + w_box / 2.))
-    # cy = int(round(y1 + h_box / 2.))
-    #
-    # x1 = cx - half_size
-    # y1 = cy - half_size
-    # x2 = cx + half_size
-    # y2 = cy + half_size
-    #
-    # if x1 < 0:
-    #     x2 = x2 - x1
-    #     x1 = 0
-    #
-    # if y1 < 0:
-    #     y2 = y2 - y1
-    #     y1 = 0
-    #
-    # if x1 > w_img - 2 * half_size:
-    #     x1 = max(w_img - 2 * half_size, 0)
-    #     x2 = w_img
-    #
-    # if y1 > h_img - 2 * half_size:
-    #     y1 = max(h_img - 2 * half_size, 0)
-    #     y2 = h_img
 
     assert (x2 - x1) == (y2 - y1), "BBox is not square!"
 
@@ -200,10 +248,10 @@ def crop_bbox(image, bbox, exp_ratio, use_square=False):
     new_box = add_bbox_margin(bbox, image.shape[0], image.shape[1], exp_ratio)
 
     if exp_ratio >=0 and use_square:
-        new_box = make_bbox_square(new_box, image.shape[0], image.shape[1])
+        new_box = make_bbox_square(new_box, image.shape[0], image.shape[1], bbox)
 
+    new_box = np.array(new_box).astype(np.int32)
     left, top, right, bottom = new_box
-    new_box = np.array(new_box)
 
     img_face = image[top: bottom, left: right].copy()
 
@@ -248,7 +296,7 @@ def convert_insightface2facer(all_face_info):
 
 
 class FaceAnalyser():
-    def __init__(self, det_thresh=0.5, min_h=150, min_w=150, exp_ratio=0.4, use_square=True,
+    def __init__(self, det_thresh=0.5, min_h=150, min_w=150, exp_ratio=0.25, use_square=True,
                  align=False, image_size=256, det_mode="insightface", td_mode=""):
 
         self.det_thresh = det_thresh
@@ -279,7 +327,7 @@ class FaceAnalyser():
         if td_mode == "flame":
             self.model_3d = SMIRK()
         elif td_mode == "3ddfa":
-            self.model_3d = TDDFAV3(device='cpu' if sys.platform == 'win32' else 'cuda')
+            self.model_3d = TDDFAV3()
 
     @torch.no_grad()
     def get_facer_lms(self, img, all_face_info):
@@ -351,10 +399,20 @@ class FaceAnalyser():
 
         try:
             self.get_facer_lms(img_bgr[:, :, ::-1].copy(), all_face_info)
-        except torch.cuda.OutOfMemoryError as e:
-            print("CUDA OOM caught:", e)
-            torch.cuda.empty_cache()
-            all_face_info = []
+        except (torch.cuda.OutOfMemoryError, torch.AcceleratorError) as e:
+            msg = str(e).lower()
+
+            if (
+                    "out of memory" in msg
+                    or "cudaerrormemoryallocation" in msg
+                    or "memory allocation" in msg
+            ):
+                print("CUDA OOM caught:", e)
+                all_face_info = []
+
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
 
         face_info = []
         is_small_face = False
@@ -363,11 +421,15 @@ class FaceAnalyser():
                 continue
 
             x1, y1, x2, y2 = info.bbox  # x1, y1, x2, y2
+            center_h = (y1 + y2) / 2
+            center_w = (x1 + x2) / 2
             x1 = max(0, x1)
             x2 = min(img_bgr.shape[1], x2)
             y1 = max(0, y1)
             y2 = min(img_bgr.shape[0], y2)
-            if (x2 - x1) < self.min_w or (y2 - y1) < self.min_h:
+            if (x2 - x1) < self.min_w or (y2 - y1) < self.min_h or \
+                    center_w < 0 or center_w >= img_bgr.shape[1] or \
+                    center_h < 0 or center_h >= img_bgr.shape[0]:
                 is_small_face = True
                 continue
             is_small_face = False
@@ -406,17 +468,16 @@ class FaceAnalyser():
 
         return face_info, is_small_face
 
-    def get_3d(self, img, face_info, verbose=False):
+    def get_3d(self, face_info, verbose=False):
         for i, info in enumerate(face_info):
+            img_face = info["face"][:, :, ::-1].copy()
+
             if self.td_mode == "flame":
-                img_3d, param_3d = self.model_3d(img, info["bbox"])
+                face_3d, param_3d, _ = self.model_3d(img_face, info["bbox_face"])
             elif self.td_mode == "3ddfa":
-                img_3d, param_3d = self.model_3d(img, info["kps"])
+                face_3d, param_3d, _ = self.model_3d(img_face, info["kps_face"])
 
-            face_3d, _ = crop_bbox(img_3d, info["bbox_crop"], exp_ratio=0.)
-            face_3d = PIL.Image.fromarray(face_3d)
-
-            face_info[i]["face_3d"] = face_3d
+            face_info[i]["face_3d"] = PIL.Image.fromarray(face_3d)
             face_info[i]["param_3d"] = param_3d
 
         if verbose:
@@ -426,24 +487,12 @@ class FaceAnalyser():
         face_info, is_small_face = self.get_face_info_insightface(img_bgr=img_bgr, verbose=verbose)
 
         if self.td_mode:
-            self.get_3d(img_bgr[:, :, ::-1].copy(), face_info, verbose=verbose)
+            self.get_3d(face_info, verbose=verbose)
 
         return face_info, is_small_face
 
-    def get_lms_image(self, lms68: np.ndarray, height, width, bbox=None, image=None, verbose=False):
+    def get_lms_image(self, lms68: np.ndarray, height, width):
         img_lms = conditioning_from_landmarks(lms68.tolist(), height, width)
-
-        if bbox is not None:
-            img_lms, _ = crop_bbox(np.array(img_lms), bbox, exp_ratio=0.)
-            img_lms = PIL.Image.fromarray(img_lms)
-
-        if verbose:
-            if bbox is not None:
-                image, _ = crop_bbox(image, bbox, exp_ratio=0.)
-
-            alpha = 0.5
-            img_mix = alpha * image + (1. - alpha) * np.array(img_lms)
-            show_result(img_mix)
 
         return img_lms
 
@@ -453,6 +502,48 @@ class FaceAnalyser():
             score_buf.append(get_area(info["bbox"]))
         pick_idx = np.argmax(score_buf)
         return pick_idx
+
+
+# follow-your-emoji: dilate eye and eyebrow mask
+def dilate_mask(mask, kernel_size=3, num_iter=4):
+    assert kernel_size % 2 == 1
+
+    # mask: [B, 1, H, W], [B, H, W] or [H, W]
+    original_ndim = mask.ndim
+    if original_ndim == 2:
+        # [H, W] -> [1, 1, H, W]
+        x = mask.unsqueeze(0).unsqueeze(0)
+    elif original_ndim == 3:
+        # [B, H, W] -> [B, 1, H, W]
+        x = mask.unsqueeze(1)
+    else:
+        # [B, C, H, W] -> unchanged
+        x = mask
+
+    padding = (kernel_size - 1) // 2
+    x = x.float()
+
+    for _ in range(num_iter):
+        # mask_points = cv2.findNonZero(mask[0].cpu().numpy().astype(np.uint8))
+        # x, y, w, h = cv2.boundingRect(mask_points)
+
+        x = torch.nn.functional.max_pool2d(
+            x,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=padding,
+        )
+
+    out = (x > 0).float()
+
+    if original_ndim == 2:
+        # [1, 1, H, W] -> [H, W]
+        out = out.squeeze(0).squeeze(0)
+    elif original_ndim == 3:
+        # [B, 1, H, W] -> [B, H, W]
+        out = out.squeeze(1)
+
+    return out
 
 
 class FaceParser():
@@ -560,7 +651,7 @@ class FaceParser():
         for i, dilate_label in enumerate(dilate_label_list):
             dilate_idx = np.where(np.array(label_all) == dilate_label)[0][0]
             dilate_iter = max(math.ceil(dilate_iter_list[i]*dilate_factor), 1)
-            mask_dilate = self.dilate_mask(seg_masks[:, dilate_idx].clone(), dilate_iter)
+            mask_dilate = dilate_mask(seg_masks[:, dilate_idx].clone(), num_iter=dilate_iter)
             seg_preds_dilate[mask_dilate == 1] = dilate_idx
 
         seg_masks_dilate = self.get_mask_from_pred(seg_preds_dilate, label_all)
@@ -568,23 +659,6 @@ class FaceParser():
         assert torch.equal(self.get_pred_from_mask(seg_masks_dilate), seg_preds_dilate)
 
         return seg_masks, seg_masks_dilate
-
-    def dilate_mask(self, mask, num_iter=4):
-        # follow-your-emoji: dilate eye and eyebrow mask
-        kernel = torch.ones(3, 3).to(self.device)
-        for _ in range(num_iter):
-            # mask_points = cv2.findNonZero(mask[0].cpu().numpy().astype(np.uint8))
-            # x, y, w, h = cv2.boundingRect(mask_points)
-
-            mask = torch.nn.functional.conv2d(
-                mask.float().unsqueeze(1),
-                kernel.unsqueeze(0).unsqueeze(0),
-                padding=1
-            ).squeeze(1) > 0
-
-        mask = mask.float()
-
-        return mask
 
     def pick_mask_from_labels(self, seg_preds, label_all, label_pick, seg_masks=None):
         if seg_masks is None:
@@ -618,7 +692,7 @@ if __name__ == '__main__':
 
     verbose = True
 
-    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=150, min_w=150, exp_ratio=0.4, align=False, td_mode="3ddfa")
+    face_analyser = FaceAnalyser(det_thresh=0.5, min_h=150, min_w=150, exp_ratio=0.25, align=False, td_mode="3ddfa")
     face_parser = FaceParser()
 
     img_path = "./assets/images/test-swap2.png"
@@ -627,12 +701,10 @@ if __name__ == '__main__':
 
     face_info, is_small_face = face_analyser.get_face_info(img_bgr=img_bgr, verbose=verbose)
     pick_idx = face_analyser.find_largest_face(face_info)
-    img_face_lms = face_analyser.get_lms_image(face_info[pick_idx]["landmark_3d_68"][:, :2],
-                                               img_bgr.shape[0], img_bgr.shape[1],
-                                               bbox=face_info[pick_idx]["bbox_crop"],
-                                               image=img_bgr, verbose=verbose)
+    img_face = face_info[pick_idx]["face"]
+    img_face_rgb = cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB)
 
-    img_face_rgb = cv2.cvtColor(face_info[pick_idx]["face"], cv2.COLOR_BGR2RGB)
+    img_face_lms = face_analyser.get_lms_image(face_info[pick_idx]["landmark_68_face"], img_face.shape[0], img_face.shape[1])
 
     face_info_face = copy.deepcopy(face_info)
     for info, info_face in zip(face_info, face_info_face):

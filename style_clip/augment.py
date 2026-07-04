@@ -24,6 +24,7 @@ except NameError:
 SCRIPT_DIR = os.path.dirname(abspath)
 
 from utils.tps import TPSDeform
+from utils.vis_utils import show_result
 
 OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
 OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
@@ -44,36 +45,74 @@ def get_clip_transform(size=224, mean=None, std=None):
     return preprocess
 
 
+class PixelDropout(object):
+    def __init__(self, dropout_prob=0.1, value=0):
+        self.dropout_prob = dropout_prob
+        self.value = value
+
+    def __call__(self, img):
+        mask = torch.rand((1, img.shape[-2], img.shape[-1]), device=img.device) < self.dropout_prob
+        return img.masked_fill(mask, self.value)
+
+
 class ContrastiveTransformations(object):
 
-    def __init__(self, size=224, mean=None, std=None, lambda_c=0):
+    def __init__(self, size=224, mean=None, std=None):
         mean = mean or OPENAI_DATASET_MEAN
         std = std or OPENAI_DATASET_STD
         normalize = transforms.Normalize(mean=mean, std=std)
 
+        # transforms_branch0 = transforms.Compose([
+        #     transforms.Resize(size=size, interpolation=transforms.InterpolationMode.BICUBIC),
+        #     transforms.CenterCrop(size),
+        #     transforms.ToTensor(),
+        #     normalize,
+        # ])
+
         transforms_branch0 = transforms.Compose([
-            transforms.Resize(size=size, interpolation=transforms.InterpolationMode.BICUBIC),
-            transforms.CenterCrop(size),
+            transforms.RandomResizedCrop(size, scale=(0.8, 1.), interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.RandomHorizontalFlip(),
+            # transforms.RandomVerticalFlip(p=0.3),
+            # transforms.RandomRotation(degrees=np.random.choice([0, 90, 180, 270])),
+            transforms.RandomApply([
+                transforms.RandomAffine(20, translate=(0.1, 0.1), scale=(0.8, 1.2))
+            ], p=1.0),
+            # transforms.ElasticTransform(alpha=50.),
+            transforms.RandomApply([
+                transforms.ColorJitter(0.2, 0.1, 0.0, 0.0)
+            ], p=0.2),
             transforms.ToTensor(),
+            transforms.RandomApply([
+                transforms.RandomChoice([
+                    GaussianNoise(mean=0.0, sigma=0.03),
+                    transforms.GaussianBlur(kernel_size=(5, 5)),
+                    PixelDropout(dropout_prob=0.01, value=0)
+                ])
+            ], p=0.8),
             normalize,
         ])
 
         # csd
         transforms_branch1 = transforms.Compose([
-            transforms.RandomResizedCrop(size, scale=(0.5, 1.), interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.RandomResizedCrop(size, scale=(0.8, 1.), interpolation=transforms.InterpolationMode.BICUBIC),
             transforms.RandomHorizontalFlip(),
             # transforms.RandomVerticalFlip(p=0.3),
             # transforms.RandomRotation(degrees=np.random.choice([0, 90, 180, 270])),
-            transforms.RandomApply([transforms.RandomAffine(30, translate=(0.2, 0.2), scale=(0.7, 1.3))],
-                                   p=1.),
+            transforms.RandomApply([
+                transforms.RandomAffine(20, translate=(0.1, 0.1), scale=(0.8, 1.2))
+            ], p=1.0),
             transforms.ElasticTransform(alpha=50.),
+            transforms.RandomApply([
+                transforms.ColorJitter(0.2, 0.1, 0.0, 0.0)
+            ], p=0.2),
             transforms.ToTensor(),
             transforms.RandomApply([
                 transforms.RandomChoice([
-                    GaussianNoise(mean=0.0, sigma=0.1),
+                    GaussianNoise(mean=0.0, sigma=0.03),
                     transforms.GaussianBlur(kernel_size=(5, 5)),
+                    PixelDropout(dropout_prob=0.01, value=0)
                 ])
-            ], p=0.5),
+            ], p=0.8),
             normalize,
         ])
 
@@ -92,7 +131,7 @@ class ContrastiveTransformations(object):
             normalize
         ])
 
-        self.transforms_b0 = transforms_branch1 if lambda_c < 1e-3 else transforms_branch0
+        self.transforms_b0 = transforms_branch0
         self.transforms_b1 = transforms_branch1
         self.transforms_b2 = transforms_branch2
 

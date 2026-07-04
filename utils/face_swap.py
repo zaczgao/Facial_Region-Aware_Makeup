@@ -192,8 +192,8 @@ def swap_face_delaunay(src_image, tgt_image, src_landmark_points, tgt_landmark_p
 
 
 def smooth_mask(mask: np.ndarray, ksize):
-    mask = cv2.GaussianBlur(mask * 255., ksize, 0) / 255.
-    mask = np.clip(mask, 0, 1)
+    mask = cv2.GaussianBlur(mask, ksize, 0)
+    mask = np.clip(mask, 0, 255)
 
     return mask
 
@@ -202,37 +202,40 @@ def blend_image_mask(img_ori: np.ndarray, img_edit: np.ndarray, mask_ori: np.nda
                      use_clone=True, ksize=(7, 7), verbose=False):
 
     if mask_ori is not None and mask_edit is not None:
-        mask = np.clip(mask_ori + mask_edit, 0, 1)
+        mask = (mask_ori.astype(np.bool_) | mask_edit.astype(np.bool_)).astype(np.float32)
     elif mask_ori is not None:
         mask = mask_ori
     elif mask_edit is not None:
         mask = mask_edit
 
+    assert np.all((mask == 0) | (mask == 1))
+    mask = np.clip((mask * 255), 0, 255).astype(np.uint8)
+
     if use_clone:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))  # extend by 3 pixels
-        mask = cv2.dilate(mask * 255., kernel, iterations=4) / 255.
+        mask = cv2.dilate(mask, kernel, iterations=4)
 
         # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))  # shrink by 3 pixels
-        # mask = cv2.erode(mask * 255., kernel, iterations=1) / 255.
+        # mask = cv2.erode(mask, kernel, iterations=1)
 
         # seamless clone to have smooth border
-        mask_points = cv2.findNonZero((mask * 255.).astype(np.uint8))
+        mask_points = cv2.findNonZero(mask)
         x, y, w, h = cv2.boundingRect(mask_points)
         center_face = (int((x + x + w) / 2), int((y + y + h) / 2))
-        img_seam = cv2.seamlessClone(img_edit, img_ori, (mask * 255.).astype(np.uint8), center_face, cv2.NORMAL_CLONE)
+        img_seam = cv2.seamlessClone(img_edit, img_ori, mask.copy(), center_face, cv2.NORMAL_CLONE)
 
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))  # shrink by 3 pixels
-        mask = cv2.erode(mask * 255., kernel, iterations=1) / 255.
+        mask = cv2.erode(mask, kernel, iterations=1)
 
         mask = smooth_mask(mask, ksize)
-        mask = np.expand_dims(mask, axis=-1)
+        mask = np.expand_dims(mask, axis=-1).astype(np.float32) / 255.
         img_mix = mask * img_edit.astype(np.float32) + (1. - mask) * img_seam.astype(np.float32)
-        img_mix = np.clip(img_mix, 0, 255).astype(np.uint8)
+        img_mix = np.clip(img_mix.round(), 0, 255).astype(np.uint8)
     else:
         mask = smooth_mask(mask, ksize)
-        mask = np.expand_dims(mask, axis=-1)
+        mask = np.expand_dims(mask, axis=-1).astype(np.float32) / 255.
         img_mix = mask * img_edit.astype(np.float32) + (1. - mask) * img_ori.astype(np.float32)
-        img_mix = np.clip(img_mix, 0, 255).astype(np.uint8)
+        img_mix = np.clip(img_mix.round(), 0, 255).astype(np.uint8)
 
     if verbose:
         img_viz = mask * img_edit.astype(np.float32)
@@ -269,8 +272,8 @@ class FaceSwap_Wrapper():
             masks_ori = masks_ori.squeeze(0)
             masks_edit = masks_edit.squeeze(0)
 
-            mask_union = torch.clamp(masks_ori + masks_edit, 0, 1)
-            mask_inter = masks_ori * masks_edit
+            mask_union = (masks_ori.bool() | masks_edit.bool()).float()
+            mask_inter = (masks_ori.bool() & masks_edit.bool()).float()
             iou = mask_inter.sum() / (mask_union.sum() + 1e-6)
 
             if (masks_ori.sum() < abs_thresh) or (masks_edit.sum() < abs_thresh) or (iou < iou_thresh and mask_union.sum() > 3000):

@@ -11,6 +11,7 @@ import sys
 
 import torch
 import torch.nn.functional as F
+import torchvision.transforms.functional as Ft
 
 from diffusers.models.attention_processor import Attention
 
@@ -86,31 +87,51 @@ def _compute_attn_loss_sub(
         located_attn_map,
         attn_scale=0.1,
         gs_blur_attn=False,
-        use_mask_loss=True
+        mode="pixel",
+        eps=1e-7,
 ):
     B, M, H, W = located_attn_map.size()
     seg_mask = seg_mask.float()
 
     if gs_blur_attn:
         seg_mask = Ft.gaussian_blur(seg_mask, [3, 3], [1, 1])
-        seg_mask = F.interpolate(seg_mask, (H, W), mode="bilinear").to(located_attn_map.dtype)
+        seg_mask = F.interpolate(seg_mask, (H, W), mode="bilinear")
     else:
-        seg_mask = F.interpolate(seg_mask, (H, W), mode="nearest").to(located_attn_map.dtype)
+        seg_mask = F.interpolate(seg_mask, (H, W), mode="nearest")
 
-    if use_mask_loss:
+    seg_mask = seg_mask.to(located_attn_map.dtype)
+    assert located_attn_map.shape == seg_mask.shape
+    assert seg_mask.max() <= 1
+
+    if mode == "seg":
         src_masks = located_attn_map.reshape(-1, H, W).flatten(1)
         target_masks = seg_mask.reshape(-1, H, W).flatten(1)
-        attn_loss_mask = sigmoid_focal_loss(src_masks, target_masks, B * M)
-        attn_loss_dice = dice_loss(src_masks, target_masks, B * M)
-        attn_loss = attn_loss_mask + attn_loss_dice
-    else:
-        q_probs = F.log_softmax(located_attn_map / attn_scale, dim=1)
-        attn_loss_object = torch.sum(-seg_mask * q_probs, dim=1)
+        loss_focal = sigmoid_focal_loss(src_masks, target_masks, B * M)
+        loss_dice = dice_loss(src_masks, target_masks, B * M)
+        loss = loss_focal + loss_dice
+    elif mode == "pixel":
+        log_probs = F.log_softmax(located_attn_map / attn_scale, dim=1)
+        loss_pixel = torch.sum(-seg_mask * log_probs, dim=1, keepdim=True)   # B, 1, H, W
 
-        attn_loss = attn_loss_object.mean(dim=(1, 2))
-        attn_loss = attn_loss.mean()
+        loss_mask_sum = (loss_pixel * seg_mask).sum(dim=(2, 3))  # B, M
+        pixel_per_mask = seg_mask.sum(dim=(2, 3))  # B, M
+        loss_mask = loss_mask_sum / (pixel_per_mask + eps)
+        active = (pixel_per_mask > 0).to(located_attn_map.dtype)  # B, M
 
-    return attn_loss
+        loss = torch.mean((loss_mask * active).sum(dim=1) / (active.sum(dim=1) + eps))
+    elif mode == "part":
+        target = seg_mask.flatten(2)  # B, M, HW
+        active = (target.sum(dim=-1) > 0).to(located_attn_map.dtype)  # B, M
+        target = target / (target.sum(dim=-1, keepdim=True) + eps)
+
+        # Spatial distribution per part/token
+        logits = located_attn_map.flatten(2) / attn_scale  # B, M, HW
+        log_probs = F.log_softmax(logits, dim=-1)
+
+        loss_per_part = -(target * log_probs).sum(dim=-1)  # B, M
+        loss = (loss_per_part * active).sum() / (active.sum() + eps)
+
+    return loss
 
 
 def _compute_attn_loss(
@@ -121,30 +142,38 @@ def _compute_attn_loss(
         is_drop,
         attn_scale=0.1,
         gs_blur_attn=False,
+        mode="pixel"
 ):
+    seg_mask = batch["seg_mask"]
     avg_attn_map = _compute_avg_attn_map(cross_attn_probs)
-    B, H, W, seq_length = avg_attn_map.size()
-    located_attn_map = []
+    ori_B, H, W, seq_length = avg_attn_map.size()
+
+    keep = ~is_drop.bool()
+    if not keep.any():
+        zero = avg_attn_map.new_zeros(())
+        empty_map = avg_attn_map.new_zeros((ori_B, seg_mask.shape[1], H, W))
+        return zero, zero.detach(), empty_map
+
+    seg_mask = seg_mask[keep]
+    avg_attn_map = avg_attn_map[keep]
+    B = avg_attn_map.shape[0]
 
     # locate the attn map
     if use_ipa:
-        for bi in range(avg_attn_map.shape[0]):
-            if is_drop[bi]:
-                avg_attn_map[bi] = avg_attn_map[bi].detach()
-
         located_attn_map = avg_attn_map.permute(0, 3, 1, 2)
 
-        num_heads_part = located_attn_map.shape[1] // batch["seg_mask"].shape[1]
+        num_heads_part = located_attn_map.shape[1] // seg_mask.shape[1]
         located_attn_map = located_attn_map.reshape(B, -1, num_heads_part, H, W)
         located_attn_map = torch.mean(located_attn_map, dim=2)
     else:
+        located_attn_map = []
         for i, placeholder_token_id in enumerate(placeholder_token_ids):
             for bi in range(B):
                 if "input_ids" in batch:
-                    learnable_idx = (batch["input_ids"][bi] == placeholder_token_id).nonzero(as_tuple=True)[0]
+                    learnable_idx = (batch["input_ids"][keep][bi] == placeholder_token_id).nonzero(as_tuple=True)[0]
                 else:
                     learnable_idx = (
-                            batch["input_ids_one"][bi] == placeholder_token_id
+                            batch["input_ids_one"][keep][bi] == placeholder_token_id
                     ).nonzero(as_tuple=True)[0]
 
                 if len(learnable_idx) != 0:  # only assign if found
@@ -164,10 +193,11 @@ def _compute_attn_loss(
         )  # (B, M, 16, 16)
 
     attn_loss = _compute_attn_loss_sub(
-        batch["seg_mask"],
+        seg_mask,
         located_attn_map,
         attn_scale,
         gs_blur_attn,
+        mode
     )
 
     return attn_loss, located_attn_map.detach().max(), located_attn_map
@@ -180,7 +210,8 @@ def calc_attn_loss(batch,
                    is_drop,
                    attn_size=16,
                    attn_scale=0.1,
-                   gs_blur_attn=False
+                   gs_blur_attn=False,
+                   mode="pixel"
                    ):
     if isinstance(attn_size, int):
         attn_size = [attn_size]
@@ -224,6 +255,7 @@ def calc_attn_loss(batch,
             is_drop,
             attn_scale=attn_scale,
             gs_blur_attn=gs_blur_attn,
+            mode=mode
         )
         total_loss += attn_loss
         avg_max += max_attn_val

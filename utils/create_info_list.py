@@ -64,8 +64,8 @@ def get_makeup_chatgpt(args):
             line = line.strip()
 
             if line:
-                result = re.match(r"^(.*?):", line)
-                result2 = re.match(r"^.*?:\s*(.*)", line)
+                result = re.search(r"^(.*?):", line)
+                result2 = re.search(r"^.*?:\s*(.*)", line)
 
                 if result:
                     makeup_info[key][result.group(1).strip()] = result2.group(1).strip()

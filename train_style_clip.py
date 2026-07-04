@@ -300,13 +300,12 @@ def main(args):
             model.load_state_dict(checkpoint)
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
-    preprocess_train = ContrastiveTransformations(size=model_without_ddp.processor.image_processor.size["shortest_edge"],
-                                                  mean=model_without_ddp.processor.image_processor.image_mean,
-                                                  std=model_without_ddp.processor.image_processor.image_std,
-                                                  lambda_c=args.lambda_c)
-    preprocess_val = get_clip_transform(size=model_without_ddp.processor.image_processor.size["shortest_edge"],
-                                       mean=model_without_ddp.processor.image_processor.image_mean,
-                                       std=model_without_ddp.processor.image_processor.image_std)
+    preprocess_train = ContrastiveTransformations(size=model_without_ddp.processor.size["shortest_edge"],
+                                                  mean=model_without_ddp.processor.image_mean,
+                                                  std=model_without_ddp.processor.image_std)
+    preprocess_val = get_clip_transform(size=model_without_ddp.processor.size["shortest_edge"],
+                                       mean=model_without_ddp.processor.image_mean,
+                                       std=model_without_ddp.processor.image_std)
 
     # initialize datasets
     tokenizer = CustomTokenizer(args.model_text)

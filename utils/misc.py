@@ -29,9 +29,19 @@ SCRIPT_DIR = os.path.dirname(abspath)
 from utils.vis_utils import show_result
 
 
-def load_image(image_path, height=None, width=None, interpolate=PIL.Image.Resampling.LANCZOS):
+IMG_EXTENSIONS = [
+    '.jpg', '.JPG', '.jpeg', '.JPEG',
+    '.png', '.PNG', '.ppm', '.PPM', '.bmp', '.BMP',
+]
+
+
+def is_image_file(filename):
+    return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
+
+
+def load_image(image_path, height=None, width=None, interpolate=PIL.Image.Resampling.LANCZOS, mode="RGB"):
     if type(image_path) is str:
-        image = PIL.Image.open(image_path).convert("RGB")
+        image = PIL.Image.open(image_path).convert(mode)
         if height is not None:
             image = image.resize((width, height), resample=interpolate)
     else:
@@ -70,34 +80,82 @@ def imgtensor2numpy(image):
     return image_np
 
 
+# def set_trainable_modules_to_train(model):
+#     for name, module in model.named_children():
+#         if len(list(module.children())) > 0:
+#             set_trainable_modules_to_train(module)
+#         else:
+#             params = list(module.parameters())
+#             has_trainable_params = (len(params) > 0) and all([p.requires_grad for p in params])
+#             is_behavior_dependent = isinstance(module, (nn.Dropout, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d))
+#
+#             if has_trainable_params or is_behavior_dependent:
+#                 module.train()
+#
+#     return model
+
 def set_trainable_modules_to_train(model):
-    for name, module in model.named_children():
+    for name, module in model.named_modules():
         if len(list(module.children())) > 0:
-            set_trainable_modules_to_train(module)
-        else:
-            params = list(module.parameters())
-            has_trainable_params = (len(params) > 0) and all([p.requires_grad for p in params])
-            is_behavior_dependent = isinstance(module, (nn.Dropout, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d))
+            continue
 
-            if has_trainable_params or is_behavior_dependent:
-                module.train()
+        params = list(module.parameters(recurse=False))
+        has_trainable_params = (len(params) > 0) and all([p.requires_grad for p in params])
+        is_behavior_dependent = isinstance(module, (nn.Dropout, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d))
 
-    return model
+        if has_trainable_params or is_behavior_dependent:
+            module.train()
 
 
-def compare_model_params(model_a, model_b, tol=0.0):
-    assert id(model_a) != id(model_b)
+def save_trainable_param(model, out_path):
+    trainable_param_names = [n for n, p in model.named_parameters() if p.requires_grad]
+    buffer_names = [n for n, _ in model.named_buffers()]
 
-    sd_a = model_a.state_dict()
-    sd_b = model_b.state_dict()
+    save_names = trainable_param_names + buffer_names
 
-    for k in sd_a.keys():
-        kb = k.replace("default.weight", "default_0.weight")
-        if not torch.equal(sd_a[k], sd_b[kb]):
-            diff = torch.max(torch.abs(sd_a[k] - sd_b[kb])).item()
-            if diff > tol:
-                print(f"Parameter '{k}' differs (max abs diff = {diff:.2e})")
-    print("All parameters are checked.")
+    save_state = {
+        k: v for k, v in model.state_dict().items()
+        if k in save_names
+    }
+    assert len(save_names) == len(save_state)
+
+    if len(save_state) > 0:
+        out_dir = os.path.dirname(out_path)
+        os.makedirs(out_dir, exist_ok=True)
+        torch.save(save_state, out_path)
+
+
+def compare_model_param(model_1, model_2, rtol=1e-05, atol=1e-04):
+    assert id(model_1) != id(model_2)
+
+    state_1 = model_1.state_dict()
+    state_2 = model_2.state_dict()
+
+    mismatches = []
+
+    for key1 in state_1.keys():
+        key2 = key1
+
+        t1 = state_1[key1]
+        t2 = state_2[key2]
+
+        if t1.shape != t2.shape:
+            mismatches.append(f"Mismatch shape: {key1} {t1.shape} vs {key2} {t2.shape}")
+            continue
+
+        try:
+            torch.testing.assert_close(t1, t2, rtol=rtol, atol=atol)
+        except AssertionError:
+            max_diff = (t1 - t2).abs().max().item()
+            mismatches.append(f"Mismatch: {key1}/{key2} (max abs diff={max_diff:.2e})")
+
+    if len(mismatches) > 0:
+        print("Found mismatches:")
+        for m in mismatches:
+            print("  ", m)
+        # raise AssertionError(f"{len(mismatches)} parameters mismatched.")
+    else:
+        print("All parameters match.")
 
 
 def gpu_mem_profile(func):

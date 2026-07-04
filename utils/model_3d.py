@@ -8,12 +8,11 @@
 git clone https://github.com/NVlabs/nvdiffrast.git
 cd nvdiffrast
 git checkout v0.4.0
-pip install --no-build-isolation .
+pip install . --no-build-isolation
 
 in /envs/torch-2/lib/python3.10/site-packages/nvdiffrast/nvdiffrast/torch/ops.py
-_cached_plugin[gl] = torch.utils.cpp_extension.load(
 # Import, cache, and return the compiled module.
-#_cached_plugin[gl] = importlib.import_module(plugin_name)
+_cached_plugin[gl] = torch.utils.cpp_extension.load( -> _cached_plugin[gl] = importlib.import_module(plugin_name)
 
 # In some scenarios, nvdiffrast may not be usable. Therefore, we additionally provide a fast CPU renderer based on face3d.
 # The results produced by the two renderers may have slight differences, but we consider these differences to be negligible.
@@ -26,7 +25,7 @@ module load cudnn/8.9.7.29-11-cuda-11.8.0-gcc-12.2.0
 git clone https://github.com/facebookresearch/pytorch3d
 cd pytorch3d
 git checkout v0.7.9
-pip install --no-build-isolation .
+pip install . --no-build-isolation
 
 win:
 x64 Native Tools Command Prompt
@@ -43,6 +42,7 @@ import sys
 import PIL.Image
 import numpy as np
 import cv2
+import copy
 from skimage.transform import estimate_transform, warp
 from scipy.spatial.transform import Rotation as R_scipy
 
@@ -104,7 +104,7 @@ class TDDFAV3():
         self.model = face_model(backbone='resnet50', device=device, use_ldm68=True, use_ldm106=False, use_ldm134=False)
 
     @torch.no_grad()
-    def __call__(self, img, lms5, alpha_dict_tgt=None):
+    def __call__(self, img, lms5, alpha_dict_src=None, trans_params_src=None):
         H = img.shape[0]
 
         landmarks = lms5.copy()
@@ -113,11 +113,13 @@ class TDDFAV3():
         trans_params, img_face, lm_face, _ = align_img(PIL.Image.fromarray(img), landmarks, self.lm3d_std)
         img_face = torch.tensor(np.array(img_face) / 255., dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
 
-        results, param_3d = self.model.forward(img_face.to(self.model.device), alpha_dict_tgt=alpha_dict_tgt)
+        results, param_3d = self.model.forward(img_face.to(self.model.device), alpha_dict_src=alpha_dict_src)
 
+        if alpha_dict_src is not None:
+            trans_params = trans_params_src
         img_render = self.render(trans_params, img, results)
 
-        return img_render, param_3d
+        return img_render, param_3d, trans_params
 
     def render(self, trans_params, img, result_dict):
         render_shape = (result_dict['render_shape'][0]*255).astype(np.uint8)
@@ -182,14 +184,6 @@ class TDDFAV3():
 
         R_rel = torch.matmul(R_tgt, R_src.transpose(1, 2))  # relative rotation
 
-        # Yaw / Pitch / Roll from relative rotation
-        yaw, pitch, roll = self.rotmat_to_ypr(R_rel)
-        yaw_deg = torch.rad2deg(yaw)
-        pitch_deg = torch.rad2deg(pitch)
-        roll_deg = torch.rad2deg(roll)
-
-        # roll, yaw, pitch = R_scipy.from_matrix(R_rel[0].cpu().numpy()).as_euler('zyx', degrees=True)
-
         # Geodesic rotation distance (SO(3))
         trace = torch.diagonal(R_rel, dim1=1, dim2=2).sum(1)
         cos_theta = torch.clamp((trace - 1) / 2, -1.0, 1.0)
@@ -199,13 +193,20 @@ class TDDFAV3():
         # R_rel = R_rel.cpu().numpy()
         # R_dist = (np.trace(R_rel, axis1=1, axis2=2) - 1) / 2
         # R_dist = np.clip(R_dist, -1, 1)
-        # R_dist = np.rad2deg(np.arccos(R_dist))
+        # angle_deg = np.rad2deg(np.arccos(R_dist))
+
+        # Yaw / Pitch / Roll from relative rotation
+        yaw, pitch, roll = self.rotmat_to_ypr(R_rel)
+        yaw_deg = torch.rad2deg(yaw)
+        pitch_deg = torch.rad2deg(pitch)
+        roll_deg = torch.rad2deg(roll)
+        # roll, yaw, pitch = R_scipy.from_matrix(R_rel[0].cpu().numpy()).as_euler('zyx', degrees=True)
 
         return angle_deg, yaw_deg, pitch_deg, roll_deg
 
 
 def crop_face(frame, landmarks, scale=1.0, image_size=224):
-    if landmarks.ndim == 2:
+    if landmarks.size > 4:
         left = np.min(landmarks[:, 0])
         right = np.max(landmarks[:, 0])
         top = np.min(landmarks[:, 1])
@@ -251,7 +252,7 @@ class SMIRK():
                                  mask_path=os.path.join(SCRIPT_DIR, "../smirk/assets/FLAME_masks/FLAME_masks.pkl")).to(device)
 
     @torch.no_grad()
-    def __call__(self, image, roi, param_3d_tgt=None):
+    def __call__(self, image, roi, param_3d_src=None, tform_src=None):
         orig_image_height, orig_image_width, _ = image.shape
 
         tform = crop_face(image, roi, scale=1.4, image_size=self.image_size)
@@ -263,12 +264,34 @@ class SMIRK():
 
         outputs = self.smirk_encoder(cropped_image)
 
-        if param_3d_tgt is not None:
-            outputs['expression_params'] = param_3d_tgt['expression_params'].clone()
-            outputs['pose_params'] = param_3d_tgt['pose_params'].clone()
-            outputs['jaw_params'] = param_3d_tgt['jaw_params'].clone()
+        if param_3d_src is not None:
+            outputs['shape_params'] = param_3d_src['shape_params'].clone()
+            outputs['cam'] = param_3d_src['cam'].clone()
+            tform = copy.deepcopy(tform_src)
 
         flame_output = self.flame.forward(outputs)
+
+        if param_3d_src is not None:
+            flame_src = self.flame.forward(param_3d_src, zero_expression=True, zero_pose=False)
+
+            # 3D FLAME/model-space landmarks on the FLAME mesh before camera projection [B, N, 3]
+            src_lmk = flame_src["landmarks_fan"]
+            tgt_lmk = flame_output["landmarks_fan"]
+
+            # 3D landmark centers
+            src_center = src_lmk[:, :, :2].mean(dim=1)  # [B, 2]
+            tgt_center = tgt_lmk[:, :, :2].mean(dim=1)  # [B, 2]
+
+            delta = src_center - tgt_center
+
+            # Most weak-perspective FLAME renderers use cam = [scale, tx, ty]
+            # and project roughly x2d = s * (x + tx), y2d = s * (y + ty).
+            # In that convention, delta from raw 3D XY landmarks/vertices, tx/ty are in pre-projection XY space, so add delta directly.
+            cam = outputs["cam"].clone()
+            cam[:, 1:3] += delta
+            outputs["cam"] = cam
+
+        # 2D projected landmarks
         renderer_output = self.renderer.forward(flame_output['vertices'], outputs['cam'],
                                            landmarks_fan=flame_output['landmarks_fan'],
                                            landmarks_mp=flame_output['landmarks_mp'])
@@ -280,7 +303,7 @@ class SMIRK():
         rendered_img_orig = warp(rendered_img_numpy, tform, output_shape=(orig_image_height, orig_image_width),
                                  preserve_range=True).astype(np.uint8)
 
-        return rendered_img_orig, outputs
+        return rendered_img_orig, outputs, tform
 
     # https://motion.cs.illinois.edu/RoboticSystems/3DRotations.html
     def calc_rel_rotation(self, param_src, param_tgt):
@@ -314,9 +337,13 @@ class SMIRK():
         # R_rel = R_rel.cpu().numpy()
         # R_dist = (np.trace(R_rel, axis1=1, axis2=2) - 1) / 2
         # R_dist = np.clip(R_dist, -1, 1)
-        # R_dist = np.rad2deg(np.arccos(R_dist))
+        # angle_deg = np.rad2deg(np.arccos(R_dist))
 
-        return angle_deg
+        yaw_deg = torch.zeros_like(angle_deg)
+        pitch_deg = torch.zeros_like(angle_deg)
+        roll_deg = torch.zeros_like(angle_deg)
+
+        return angle_deg, yaw_deg, pitch_deg, roll_deg
 
 
 if __name__ == '__main__':

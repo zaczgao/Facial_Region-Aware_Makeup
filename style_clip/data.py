@@ -170,11 +170,11 @@ if __name__ == '__main__':
     from utils.misc import denormalize_batch
     from utils.vis_utils import show_face_result
 
-    data_root = "./output/makeup_pair/makeup"
-    anno_path = "./output/makeup_pair/makeup_pair_ffhq_kontext-train.csv"
+    data_root = "./output/makeup_pair_ffhq/makeup"
+    anno_path = "./output/makeup_pair_ffhq/makeup_pair_ffhq_kontext-train.csv"
 
     # preprocess = get_clip_transform()
-    preprocess = ContrastiveTransformations(size=224, lambda_c=0)
+    preprocess = ContrastiveTransformations(size=224)
     tokenizer = CustomTokenizer("vit_large")
 
     # img = PIL.Image.open("./assets/images/00128-003-Smoky_Seductress-00.png")

@@ -347,9 +347,9 @@ def load_network(model, path, checkpoint_key="net", strict=True):
         msg = model.load_state_dict(state_dict_new, strict=strict)
         assert msg.missing_keys == []
 
-        print("=> loaded weights model '{}'".format(path))
+        print("=> loaded model weight from '{}'".format(path))
     else:
-        print("=> no weights found at '{}'".format(path))
+        print("=> no weight found at '{}'".format(path))
 
 
 if __name__ == '__main__':

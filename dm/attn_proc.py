@@ -44,10 +44,10 @@ def setup_attn_processor(unet, **kwargs):
             hidden_size = unet.config.block_out_channels[block_id]
 
         if cross_attention_dim is None:
-            attention_class = (
+            attn_processor_class = (
                 CustomAttnProcessor2_0 if hasattr(F, "scaled_dot_product_attention") else CustomAttnProcessor
             )
-            attn_procs[name] = attention_class()
+            attn_procs[name] = attn_processor_class()
         else:
             layer_name = name.split(".processor")[0]
             try:
@@ -76,7 +76,6 @@ def setup_attn_processor(unet, **kwargs):
 
 # chirpy3d
 def load_attn_processor(unet, filename):
-    print(f"Load attn processors from {filename}")
     attn_layers = AttnProcsLayers(unet.attn_processors)
     if "safetensors" in filename:
         from safetensors.torch import load_file
@@ -84,13 +83,14 @@ def load_attn_processor(unet, filename):
         attn_layers.load_state_dict(load_file(filename))
     else:
         attn_layers.load_state_dict(torch.load(filename, map_location="cpu"))
+    print(f"Loaded attn processors from {filename}")
 
 
 # https://github.com/tencent-ailab/IP-Adapter/blob/main/ip_adapter/attention_processor.py
 # https://github.com/huggingface/diffusers/blob/157c9011d87e52632113024c1dc5125426971556/src/diffusers/models/attention_processor.py
 class CustomCrossAttnProcessor(nn.Module):
     def __init__(self, attn_size, use_self_attn=False, use_hidden_state=False,
-                 use_ipa=True, hidden_size=None, cross_attention_dim=None, scale=1.0, norm_ipa=False):
+                 use_ipa=True, hidden_size=None, cross_attention_dim=None, scale=1.0):
         super().__init__()
 
         if isinstance(attn_size, int):
@@ -103,7 +103,6 @@ class CustomCrossAttnProcessor(nn.Module):
         self.hidden_size = hidden_size
         self.cross_attention_dim = cross_attention_dim
         self.scale = scale
-        self.norm_ipa = norm_ipa
 
         if self.use_ipa:
             self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
@@ -184,6 +183,7 @@ class CustomCrossAttnProcessor(nn.Module):
                 #     encoder_hidden_states[:, end_pos:, :],
                 # )
 
+                assert isinstance(encoder_hidden_states, list)
                 encoder_hidden_states, ip_hidden_states = encoder_hidden_states
 
         residual = hidden_states
@@ -230,6 +230,11 @@ class CustomCrossAttnProcessor(nn.Module):
             if attn.norm_k is not None:
                 key = attn.norm_k(key)
 
+            if attention_mask is not None:
+                # scaled_dot_product_attention expects attention_mask shape to be
+                # (batch, heads, source_length, target_length)
+                attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
+
             # the output of sdp = (batch, num_heads, seq_len, head_dim)
             # TODO: add support for attn.scale when we move to Torch 2.1
             hidden_states = F.scaled_dot_product_attention(
@@ -252,14 +257,6 @@ class CustomCrossAttnProcessor(nn.Module):
                                                                                 attn.upcast_softmax)
             ip_hidden_states = torch.bmm(attention_probs_ip, ip_value)
             ip_hidden_states = attn.batch_to_head_dim(ip_hidden_states)
-
-            # norm
-            if self.norm_ipa:
-                mean_latents = torch.mean(hidden_states, dim=-1, keepdim=True)
-                std_latents = torch.std(hidden_states, dim=-1, keepdim=True, unbiased=False)
-                mean_ip = torch.mean(ip_hidden_states, dim=-1, keepdim=True)
-                std_ip = torch.std(ip_hidden_states, dim=-1, keepdim=True, unbiased=False)
-                ip_hidden_states = std_latents * (ip_hidden_states - mean_ip) / (std_ip + 1e-7) + mean_latents
 
             hidden_states = hidden_states + self.scale * ip_hidden_states
         else:
@@ -287,28 +284,24 @@ class CustomCrossAttnProcessor(nn.Module):
         hidden_states = hidden_states / attn.rescale_output_factor
 
         # store attention map
-        total_qk = hidden_states.size(1)  # (B*Head,HW,L)
-        sqrt_total = int(total_qk ** 0.5)
+        if input_ndim == 3:
+            total_qk = hidden_states.size(1)  # (B,HW,L)
+            sqrt_total = int(total_qk ** 0.5)
         attn.cross_attn_probs = None
         attn.self_attn_probs = None
         attn.embeddings = None
 
-        if self.use_ipa:
-            attn_probs_cache = attention_scores_ip
+        if (not is_self_attention) and self.use_ipa:
+            attn_cache = attention_scores_ip
         else:
-            # attn_probs_cache = attention_probs
-            attn_probs_cache = attention_scores
+            attn_cache = attention_scores
 
         if is_self_attention and sqrt_total in self.attn_size and self.use_self_attn:
-            attn.self_attn_probs = attn_probs_cache.reshape(batch_size, -1, sqrt_total * sqrt_total, sqrt_total * sqrt_total)
-            attn.cross_attn_probs = None
-            if self.use_hidden_state:
-                attn.embeddings = hidden_states.clone()
+            attn.self_attn_probs = attn_cache.reshape(batch_size, -1, sqrt_total * sqrt_total, sqrt_total * sqrt_total)
         elif (not is_self_attention) and sqrt_total in self.attn_size:
-            attn.cross_attn_probs = attn_probs_cache.reshape(batch_size, -1, sqrt_total, sqrt_total, attn_probs_cache.shape[2])
-            attn.self_attn_probs = None
-            if self.use_hidden_state:
-                attn.embeddings = hidden_states.clone()  # (B,C,H,W)
+            attn.cross_attn_probs = attn_cache.reshape(batch_size, -1, sqrt_total, sqrt_total, attn_cache.shape[2])
+        if self.use_hidden_state:
+            attn.embeddings = hidden_states.clone()
 
         return hidden_states
 

@@ -15,9 +15,7 @@ import torch
 import torch.nn.functional as F
 
 from diffusers import StableDiffusionImg2ImgPipeline, StableDiffusionControlNetInpaintPipeline, StableDiffusionXLControlNetUnionInpaintPipeline
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
 from diffusers.pipelines.stable_diffusion.pipeline_output import StableDiffusionPipelineOutput
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import retrieve_latents
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.image_processor import PipelineImageInput
 from diffusers.loaders import StableDiffusionLoraLoaderMixin, TextualInversionLoaderMixin
@@ -49,8 +47,8 @@ except NameError:
     abspath = os.getcwd()
 SCRIPT_DIR = os.path.dirname(abspath)
 
-from dm.attn_proc import CustomCrossAttnProcessor
-from dm.controlnet_union import ControlNetUnionModel
+from .attn_proc import CustomCrossAttnProcessor
+from .controlnet_union import ControlNetUnionModel
 
 
 class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
@@ -527,7 +525,6 @@ class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
             guess_mode: bool = False,
             control_guidance_start: Union[float, List[float]] = 0.0,
             control_guidance_end: Union[float, List[float]] = 1.0,
-            control_mode: Optional[Union[int, List[int], List[List[int]]]] = None,
             clip_skip: Optional[int] = None,
             callback_on_step_end: Optional[
                 Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
@@ -536,6 +533,7 @@ class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
 
             image_makeup=None,
             token_idx=None,
+            control_mode: Optional[Union[int, List[int], List[List[int]]]] = None,
             **kwargs,
     ):
         r"""
@@ -767,6 +765,7 @@ class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
         )
         guess_mode = guess_mode or global_pool_conditions
 
+
         if isinstance(image_makeup, list):
             image_makeup_list = image_makeup
         else:
@@ -775,7 +774,9 @@ class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
         style_feat_list = []
         for image_makeup in image_makeup_list:
             _, style_feat, _, _ = self.style_clip.get_image_feat(image_makeup, hidden_layer_idx=self.clip_hidden)
+            style_feat = style_feat.to(self.text_encoder.dtype)
             style_feat_list.append(style_feat)
+
 
         # 3. Encode input prompt
         text_encoder_lora_scale = (
@@ -814,23 +815,25 @@ class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
 
             if token_idx is not None or len(image_makeup_list) > 1:
                 _, style_feat_id, _, _ = self.style_clip.get_image_feat(image, hidden_layer_idx=self.clip_hidden)
+                style_feat_id = style_feat_id.to(prompt_embeds.dtype)
+
                 prompt_image_emb_id = self._encode_prompt_image_emb(style_feat_id,
                                                                  device,
                                                                  num_images_per_prompt,
                                                                  self.unet.dtype,
                                                                  self.do_classifier_free_guidance)
 
+            num_heads_part = self.makeup_adapter.num_heads_part
             if len(image_makeup_list) == 1:
                 prompt_image_emb = prompt_image_emb_list[0]
 
                 if token_idx is not None:
                     prompt_image_emb_tmp = prompt_image_emb_id.clone()
                     for idx in token_idx:
-                        prompt_image_emb_tmp[:, idx] = prompt_image_emb[:, idx]
+                        prompt_image_emb_tmp[:, idx*num_heads_part:(idx+1)*num_heads_part] = prompt_image_emb[:, idx*num_heads_part:(idx+1)*num_heads_part]
                     prompt_image_emb = prompt_image_emb_tmp
             else:
                 prompt_image_emb = prompt_image_emb_id.clone()
-                num_heads_part = self.makeup_adapter.num_heads_part
                 # face, eyes, nose, mouth
                 prompt_image_emb[:, 0*num_heads_part:1*num_heads_part] = prompt_image_emb_list[0][:, 0*num_heads_part:1*num_heads_part]
                 prompt_image_emb[:, 1*num_heads_part:2*num_heads_part] = prompt_image_emb_list[1][:, 1*num_heads_part:2*num_heads_part]
@@ -952,12 +955,15 @@ class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
             is_strength_max=is_strength_max,
             return_noise=True,
             return_image_latents=return_image_latents,
-            )
+        )
 
         if return_image_latents:
             latents, noise, image_latents = latents_outputs
         else:
             latents, noise = latents_outputs
+
+        # # preserve id
+        # latents = self.scheduler.add_noise(image_latents, noise, latent_timestep)
 
         # 7. Prepare mask latent variables
         mask, masked_image_latents = self.prepare_mask_latents(
@@ -1035,11 +1041,11 @@ class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
                     control_model_input = latents
                     control_model_input = self.scheduler.scale_model_input(control_model_input, t)
                     # controlnet_prompt_embeds = prompt_embeds.chunk(2)[1]
-                    controlnet_prompt_embeds = null_text_embeds.repeat(batch_size * 2, 1, 1)
+                    controlnet_prompt_embeds = null_text_embeds.repeat(batch_size * num_images_per_prompt * 2, 1, 1)
                 else:
                     control_model_input = latent_model_input
                     # controlnet_prompt_embeds = prompt_embeds
-                    controlnet_prompt_embeds = null_text_embeds.repeat(batch_size * 2, 1, 1)
+                    controlnet_prompt_embeds = null_text_embeds.repeat(batch_size * num_images_per_prompt * 2, 1, 1)
 
                 if isinstance(controlnet_keep[i], list):
                     cond_scale = [c * s for c, s in zip(controlnet_conditioning_scale, controlnet_keep[i])]

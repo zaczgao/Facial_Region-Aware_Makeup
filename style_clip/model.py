@@ -17,8 +17,8 @@ import torch.nn.functional as F
 import torch.distributed.nn
 
 # import clip
-from transformers import CLIPVisionConfig, CLIPTextConfig, CLIPVisionModelWithProjection, AutoProcessor, \
-    CLIPTextModelWithProjection, AutoTokenizer
+from transformers import CLIPVisionConfig, CLIPTextConfig, CLIPVisionModelWithProjection, CLIPImageProcessor, \
+    CLIPTextModelWithProjection, CLIPTokenizer
 from peft import get_peft_model, LoraConfig, PeftModel
 from peft.tuners.lora import LoraLayer
 
@@ -35,10 +35,10 @@ from style_clip.distributed import is_dist_avail_and_initialized
 
 # id, backbone dim, proj dim
 CLIP_ARCH = {
-    "vit_base": ["openai/clip-vit-base-patch16", 768, 512],
-    "vit_large": ["openai/clip-vit-large-patch14", 1024, 768],
-    "vit_huge": ["laion/CLIP-ViT-H-14-laion2B-s32B-b79K", 1280, 1024],
-    "vit_giant": ["laion/CLIP-ViT-g-14-laion2B-s12B-b42K", 1408, 1024],
+    "vit_base": ["openai/clip-vit-base-patch16", 768, 512],  # 224
+    "vit_large": ["openai/clip-vit-large-patch14", 1024, 768],  # 224
+    "vit_huge": ["laion/CLIP-ViT-H-14-laion2B-s32B-b79K", 1280, 1024],  # 224
+    "vit_giant": ["laion/CLIP-ViT-g-14-laion2B-s12B-b42K", 1408, 1024],  # 224
 }
 
 
@@ -95,36 +95,13 @@ def _tie_weights(src_model, tgt_model):
         param_tgt.data.copy_(param_src.data)
 
 
-# def set_freeze_to_eval(model):
-#     for name, module in model.named_modules():
-#         # Check if the module has parameters
-#         params = list(module.parameters(recurse=False))
-#         if not params:
-#             continue  # Skip modules without parameters
-#
-#         # If all parameters are frozen, set this module to eval
-#         if all(not p.requires_grad for p in params):
-#             module.eval()
-
-
-# def set_freeze_to_eval(model):
-#     for name, module in model.named_children():
-#         if len(list(module.children())) > 0:
-#             set_freeze_to_eval(module)
-#
-#         params = list(module.parameters())
-#         if (len(params) > 0) and all([not p.requires_grad for p in params]):
-#             module.eval()
-#
-#     return model
-
-
 class CustomTokenizer(nn.Module):
     def __init__(self, model_name):
         super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained(CLIP_ARCH[model_name][0])
+        self.tokenizer = CLIPTokenizer.from_pretrained(CLIP_ARCH[model_name][0])
 
     def forward(self, text):
+        # for batch data with same length
         text_input = self.tokenizer(
             text,
             max_length=self.tokenizer.model_max_length,
@@ -172,7 +149,7 @@ class StyleCLIP(nn.Module):
         self.visual = vision_model
         self.visual.visual_projection = nn.Identity()
 
-        self.processor = AutoProcessor.from_pretrained(model_id)
+        self.processor = CLIPImageProcessor.from_pretrained(model_id)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -241,7 +218,7 @@ class StyleCLIP(nn.Module):
             _unlock(groups[-unlocked_groups:])
 
     # https://github.com/ssundaram21/dreamsim/training/train.py
-    def prep_lora_model(self, lora_r=8, lora_alpha=8, lora_dropout=0.2):
+    def prep_lora_model(self, lora_r=8, lora_alpha=8, lora_dropout=0.0):
         # target_modules = ['q_proj', 'k_proj', 'v_proj', 'out_proj']
         target_modules = []
         for idx in range(20, 24):

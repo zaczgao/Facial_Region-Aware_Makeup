@@ -1,11 +1,12 @@
+setuptools==80.10.2
 numpy==1.26.4
 timm==0.9.16
-diffusers==0.37.0
-transformers==4.53.3
-peft==0.17.1
-safetensors==0.5.3
+diffusers==0.38.0
+transformers==4.57.6
+accelerate==1.14.0
+peft==0.18.1
+safetensors
 datasets==2.21.0
-accelerate==1.13.0
 huggingface_hub==0.34.4
 sentencepiece
 insightface
@@ -20,15 +21,15 @@ git+https://github.com/openai/CLIP.git
 # pip install chumpy==0.70 --no-build-isolation
 einops
 protobuf
-opencv-python==4.11.0.86
+opencv-contrib-python==4.11.0.86
 tensorboard
 torch_tps
 fvcore
 albumentations
 imgaug
 timed-decorator
-torch-fidelity
 torchmetrics
+pyiqa
 openai
 google-genai
 rotary-embedding-torch
@@ -36,4 +37,4 @@ ninja
 #tensorflow==2.10.1
 # pip install xformers --index-url https://download.pytorch.org/whl/cu118
 # git clone --recurse-submodules https://github.com/facebookresearch/xformers
-# pip install -v --no-build-isolation .
+# pip install . -v --no-build-isolation

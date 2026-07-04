@@ -210,9 +210,12 @@ class MakeupAdapter(nn.Module):
             with torch.no_grad():
                 encoder_hidden_states = text_encoder(input_ids)[0]
 
-            style_feat_uc = torch.zeros_like(style_feat)
-            mask = is_drop_style.view(-1, 1, 1).to(style_feat.device)
-            style_feat = style_feat * (~mask).float() + style_feat_uc * mask.float()
+            # style_feat_uc = torch.zeros_like(style_feat)
+            # drop_mask = is_drop_style.view(-1, 1, 1).to(dtype=style_feat.dtype)
+            # style_feat = style_feat * (1 - drop_mask) + style_feat_uc * drop_mask
+            style_feat = torch.where(is_drop_style.view(-1, 1, 1),
+                                     torch.zeros_like(style_feat),
+                                     style_feat)
 
             style_emb = self.style_proj(style_feat)
 
@@ -262,12 +265,9 @@ class MakeupAdapter(nn.Module):
         # mid_block_res_sample = mid_block_res_sample_id + mid_block_res_sample_pose
 
         # drop condition
-        # for bi in range(input_ids.shape[0]):
-        #     if is_drop_id[bi]:
-        #         for sample in down_block_res_samples:
-        #             sample[bi] = torch.zeros_like(sample[bi])
-        #
-        #         mid_block_res_sample[bi] = torch.zeros_like(mid_block_res_sample[bi])
+        # for sample in down_block_res_samples:
+        #     sample[id_drop_id] = 0
+        # mid_block_res_sample[is_drop_id] = 0
 
         return encoder_hidden_states, down_block_res_samples, mid_block_res_sample
 

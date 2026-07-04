@@ -44,9 +44,9 @@ except NameError:
     abspath = os.getcwd()
 SCRIPT_DIR = os.path.dirname(abspath)
 
-HF_TOKEN=f""
-OPENAI_API_KEY=f""
-OPENROUTER_API_KEY=f""
+HF_TOKEN = os.getenv("HF_TOKEN") or f""
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or f""
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or f""
 
 
 def init_sd():
@@ -257,7 +257,7 @@ def sample_qwen_edit(pipe, input_image, prompt):
     return image
 
 
-def sample_gpt_t2i(client, prompt, model="gpt-4.1"):
+def sample_gpt_t2i(client, prompt, model="gpt-5"):
     response = client.responses.create(
         model=model,
         input=prompt,
@@ -318,7 +318,7 @@ def encode_pil_image(pil_image):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 
-def sample_gpt_edit(client, img_path, mask_path, prompt, model="gpt-4.1"):
+def sample_gpt_edit(client, img_path, mask_path, prompt, model="gpt-5"):
     fileId = create_file(client, img_path)
     maskId = create_file(client, mask_path)
 
@@ -375,19 +375,22 @@ def sample_gpt_text(client, prompt, img_list=None, model="gpt-5", **kargs):
     https://platform.openai.com/docs/guides/images-vision
     """
     assert model in ["gpt-5", "o3"], f"Not implemented model {model}"
-    sys_promot = "You are a helpful assistant."
+    sys_prompt = "You are a helpful assistant."
     input = [
-        {"role": "system", "content": sys_promot},
-        {"role": "user", "content": []}]
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": []}
+    ]
     input[1]["content"].append({"type": "input_text", "text": f"{prompt}"})
 
     if img_list is not None:
         for img in img_list:
             input[1]["content"].append(
-                {"type": "input_image",
-                 "image_url": f"data:image/png;base64,{img}",
-                 "detail": "high"
-                 })
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{img}",
+                    "detail": "high"
+                }
+            )
 
     response_format = kargs.get('response_format', None)
 
@@ -395,7 +398,7 @@ def sample_gpt_text(client, prompt, img_list=None, model="gpt-5", **kargs):
         model=model,
         reasoning={"effort": "medium"},
         input=input,
-        text={"format": {"type": "json_object"}} if response_format is None else response_format
+        text={"format": response_format or {"type": "json_object"}}
     )
 
     if response.status == "completed":
@@ -432,7 +435,7 @@ def sample_gpt_text(client, prompt, img_list=None, model="gpt-5", **kargs):
 #     return response.text
 
 
-def sample_gemini_text(client, prompt, img_list=None, model="gemini-3-pro-preview", **kargs):
+def sample_gemini_text(client, prompt, img_list=None, model="google/gemini-3-pro-preview", **kargs):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": OPENROUTER_API_KEY,
@@ -454,27 +457,21 @@ def sample_gemini_text(client, prompt, img_list=None, model="gemini-3-pro-previe
 
     if img_list is not None:
         for img in img_list:
-            messages[0]["content"].append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{img}"
+            messages[0]["content"].append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{img}"
+                    }
                 }
-            }
             )
 
     response_format = kargs.get('response_format', None)
 
     payload = {
-        "model": f"google/{model}",
+        "model": model,
         "messages": messages,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "response",
-                "strict": True,
-                "schema": response_format,
-            },
-        },
+        "response_format": response_format,
         "plugins": [
             {"id": "response-healing"}
         ]
@@ -577,7 +574,7 @@ def merge_anno(data_dir, split=None):
     return merge_anno_path
 
 
-def create_split(anno_path):
+def create_data_split(anno_path):
     df = pd.read_csv(anno_path, encoding="utf-8")
 
     df_shuffle = df.sample(frac=1, random_state=42, ignore_index=False)
