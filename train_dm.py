@@ -499,7 +499,7 @@ def parse_args():
     parser.add_argument("--attn_size", type=str, default="8,16")
     parser.add_argument("--num_parts", type=int, default=4, help="Number of facial regions")
     parser.add_argument("--num_heads_part", type=int, default=16, help="Number of head per facial region")
-    parser.add_argument("--skip_background", default=False, action="store_true")
+    parser.add_argument("--skip_background", type=int, default=0)
     parser.add_argument("--use_lora", type=int, default=0, help="Use lora for sd backbone")
     parser.add_argument("--use_ipa", type=int, default=0, help="Use ipa for makeup style")
     parser.add_argument("--use_text_inv", type=int, default=0, help="Use text inversion for makeup style")
@@ -616,16 +616,15 @@ def main():
         style_clip.prep_lora_model()
     clip_utils.load_network(style_clip, args.style_clip_ckpt, "state_dict", strict=False)
 
-    if not args.skip_background:
-        args.num_parts = args.num_parts + 1
-
+    num_parts = args.num_parts if args.skip_background else args.num_parts + 1
     clip_hidden = [int(a) for a in args.clip_hidden.split(",")]
     makeup_adapter = MakeupAdapter(
         style_in_dim=style_clip.clip_dim,
         style_out_dim=unet.config.cross_attention_dim if args.use_ipa else text_encoder.text_model.embeddings.token_embedding.embedding_dim,
         style_seq_len=256 * len(clip_hidden),
-        num_parts=args.num_parts,
+        num_parts=num_parts,
         num_heads_part=args.num_heads_part,
+        skip_background=args.skip_background,
         unet=unet,
         use_ipa=args.use_ipa,
         use_text_inv=args.use_text_inv
@@ -637,7 +636,7 @@ def main():
         tokenizer,
         text_encoder,
         placeholder_token,
-        args.num_parts,
+        num_parts,
     )
 
     base_prompt = args.validation_prompt
@@ -878,7 +877,7 @@ def main():
     train_dataset = dataset_cls(args.train_data_dir, args.resolution, args.center_crop, args.random_flip,
                                 tokenizer, base_prompt, args.use_templates, args.vector_shuffle, args.drop_tokens, args.drop_tokens_rate,
                                 args.swap_pair_rate, [args.drop_p_text, args.drop_p_style, args.drop_p_all],
-                                args.skip_background, args.num_parts, args.geo_mode)
+                                args.skip_background, args.geo_mode)
 
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
@@ -998,6 +997,8 @@ def main():
         train_loss_diff_mask = 0.0
         train_loss_attn = 0.0
         for step, batch in enumerate(train_dataloader):
+            assert num_parts == batch["seg_mask"].shape[1]
+
             with accelerator.accumulate(unet, makeup_adapter):
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
@@ -1273,7 +1274,7 @@ def main():
         # Load previous pipeline
         if args.validation_prompt is not None:
             pipeline = init_pipeline(args.pretrained_model_name_or_path, args.revision, args.variant,
-                                     args.placeholder_token, args.num_parts, args.num_heads_part,
+                                     args.placeholder_token, args.num_parts, args.num_heads_part, args.skip_background,
                                      args.use_ipa, args.use_text_inv,
                                      args.use_lora, args.use_ema,
                                      args.style_clip_ckpt, args.use_clip_lora, args.clip_hidden,

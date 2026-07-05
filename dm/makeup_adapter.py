@@ -143,12 +143,15 @@ class MformerProjector(nn.Module):
 
 
 class MakeupAdapter(nn.Module):
-    def __init__(self, style_mode="resampler", style_in_dim=1024, style_out_dim=1024, style_seq_len=None, num_parts=4, num_heads_part=4,
+    def __init__(self, style_mode="resampler", style_in_dim=1024, style_out_dim=1024, style_seq_len=None,
+                 num_parts=4, num_heads_part=4, skip_background=True,
                  unet=None, use_ipa=False, use_text_inv=False, controlnet_model_name_or_path=None):
         super().__init__()
 
         self.style_mode = style_mode
+        self.num_parts = num_parts
         self.num_heads_part = num_heads_part
+        self.skip_background = skip_background
         self.use_ipa = use_ipa
         self.use_text_inv = use_text_inv
 
@@ -219,8 +222,16 @@ class MakeupAdapter(nn.Module):
 
             style_emb = self.style_proj(style_feat)
 
+            ipa_attn_mask = None
+            if not self.skip_background:
+                ipa_attn_mask = torch.zeros(self.num_parts * self.num_heads_part)
+                ipa_attn_mask[:self.num_heads_part] = 1
+                ipa_attn_mask = ipa_attn_mask.reshape(1, 1, -1)
+                ipa_attn_mask = ipa_attn_mask.repeat(bsz, 1, 1)
+                ipa_attn_mask = ipa_attn_mask.to(device=noisy_latents.device, dtype=torch.bool)
+
             # encoder_hidden_states = torch.cat([encoder_hidden_states, style_emb], dim=1)
-            encoder_hidden_states = [encoder_hidden_states, style_emb]
+            encoder_hidden_states = [encoder_hidden_states, style_emb, ipa_attn_mask]
         elif self.use_text_inv:
             style_emb = self.style_proj(style_feat)
 

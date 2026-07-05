@@ -128,23 +128,32 @@ class CustomCrossAttnProcessor(nn.Module):
             query = query.float()
             key = key.float()
 
-        if attention_mask is None:
-            baddbmm_input = torch.empty(
-                query.shape[0], query.shape[1], key.shape[1], dtype=query.dtype, device=query.device
-            )
-            beta = 0
-        else:
-            baddbmm_input = attention_mask
-            beta = 1
+        # if attention_mask is None:
+        #     baddbmm_input = torch.empty(
+        #         query.shape[0], query.shape[1], key.shape[1], dtype=query.dtype, device=query.device
+        #     )
+        #     beta = 0
+        # else:
+        #     baddbmm_input = attention_mask
+        #     beta = 1
+        #
+        # attention_scores = torch.baddbmm(
+        #     baddbmm_input,
+        #     query,
+        #     key.transpose(-1, -2),
+        #     beta=beta,
+        #     alpha=scale,
+        # )
+        # del baddbmm_input
 
-        attention_scores = torch.baddbmm(
-            baddbmm_input,
-            query,
-            key.transpose(-1, -2),
-            beta=beta,
-            alpha=scale,
-        )
-        del baddbmm_input
+        attn_score_raw = (query @ key.transpose(-1, -2)) * scale
+        if attention_mask is None:
+            attention_scores = attn_score_raw
+        else:
+            num_head = attn_score_raw.shape[0] // attention_mask.shape[0]
+            attention_mask = attention_mask.unsqueeze(1).repeat(1, num_head, 1, 1)  # b n m -> b 1 n m Unsqueeze attention mask for multi-head
+            attention_mask = attention_mask.flatten(start_dim=0, end_dim=1)
+            attention_scores = attn_score_raw.masked_fill(attention_mask, -torch.finfo(attn_score_raw.dtype).max)
 
         if upcast_softmax:
             attention_scores = attention_scores.float()
@@ -152,9 +161,9 @@ class CustomCrossAttnProcessor(nn.Module):
         attention_probs = attention_scores.softmax(dim=-1)
 
         attention_probs = attention_probs.to(dtype)
-        attention_scores = attention_scores.to(dtype)
+        attn_score_raw = attn_score_raw.to(dtype)
 
-        return attention_probs, attention_scores
+        return attention_probs, attn_score_raw
 
     def forward(
             self,
@@ -184,7 +193,7 @@ class CustomCrossAttnProcessor(nn.Module):
                 # )
 
                 assert isinstance(encoder_hidden_states, list)
-                encoder_hidden_states, ip_hidden_states = encoder_hidden_states
+                encoder_hidden_states, ip_hidden_states, ipa_attn_mask = encoder_hidden_states
 
         residual = hidden_states
 
@@ -252,7 +261,7 @@ class CustomCrossAttnProcessor(nn.Module):
             ip_key = attn.head_to_batch_dim(ip_key)
             ip_value = attn.head_to_batch_dim(ip_value)
 
-            attention_probs_ip, attention_scores_ip = self.get_attention_scores(ip_query, ip_key, None,
+            attention_probs_ip, attention_scores_ip = self.get_attention_scores(ip_query, ip_key, ipa_attn_mask,
                                                                                 attn.scale, attn.upcast_attention,
                                                                                 attn.upcast_softmax)
             ip_hidden_states = torch.bmm(attention_probs_ip, ip_value)

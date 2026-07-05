@@ -83,8 +83,9 @@ PLACEHOLDER="<part>"
 PROMPT="a person with makeup"
 GEO_MODE="3d"
 CLIP_LORA=1
-CLIP_HIDDEN="3,12,24"
+CLIP_HIDDEN="6,12,24"
 NUM_PARTS=4
+SKIP_BG=0
 USE_IPA=1
 USE_TEXT_INV=0
 SD_LORA=1
@@ -95,8 +96,10 @@ python -u ./test_dm.py \
  --ckpt_dir=${OUT_DIR} \
  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
  --placeholder_token=${PLACEHOLDER} \
- --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --geo_mode=${GEO_MODE} \
- --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
+ --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} \
+ --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
+ --use_lora=${SD_LORA} \
+ --geo_mode=${GEO_MODE} \
  --data_id_path="/path/to/id/image" \
  --data_makeup_path="/path/to/makeup/image" \
  --validation_prompt="${PROMPT}" \
@@ -115,8 +118,9 @@ PLACEHOLDER="<part>"
 PROMPT="a person with makeup"
 GEO_MODE="3d"
 CLIP_LORA=1
-CLIP_HIDDEN="3,12,24"
+CLIP_HIDDEN="6,12,24"
 NUM_PARTS=4
+SKIP_BG=0
 USE_IPA=1
 USE_TEXT_INV=0
 SD_LORA=1
@@ -127,8 +131,10 @@ python -u ./test_dm.py \
  --ckpt_dir=${OUT_DIR} \
  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
  --placeholder_token=${PLACEHOLDER} \
- --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} --geo_mode=${GEO_MODE} \
- --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
+ --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} \
+ --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
+ --use_lora=${SD_LORA} \
+ --geo_mode=${GEO_MODE} \
  --data_id_path="/path/to/id/image" \
  --data_makeup_path="/path/to/makeup1;/path/to/makeup2;/path/to/makeup3" \
  --validation_prompt="${PROMPT}" \

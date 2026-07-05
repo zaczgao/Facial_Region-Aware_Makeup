@@ -75,6 +75,7 @@ def parse_args():
     parser.add_argument("--placeholder_token", type=str, default="<part>", help="A token to use as a placeholder for the concept.")
     parser.add_argument("--num_parts", type=int, default=4, help="Number of facial regions")
     parser.add_argument("--num_heads_part", type=int, default=16, help="Number of head per facial region")
+    parser.add_argument("--skip_background", type=int, default=0)
     parser.add_argument("--use_ipa", type=int, default=0, help="Use ipa for makeup style")
     parser.add_argument("--use_text_inv", type=int, default=0, help="Use text inversion for makeup style")
     parser.add_argument("--ipa_scale", type=float, default=1.)
@@ -249,7 +250,8 @@ def vis_attn_map(img, unet, prompt, tokenizer, placeholder_token_ids, attn_size=
         cv2.imwrite(os.path.join(out_dir, f"attn-{idx}.png"), overlay)
 
 
-def init_pipeline(pretrained_model_name_or_path, revision, variant, placeholder_token, num_parts, num_heads_part,
+def init_pipeline(pretrained_model_name_or_path, revision, variant,
+                  placeholder_token, num_parts, num_heads_part, skip_background,
                   use_ipa, use_text_inv, use_lora, use_ema,
                   style_clip_ckpt, use_clip_lora, clip_hidden, **kargs):
     ipa_scale = kargs["ipa_scale"]
@@ -276,6 +278,8 @@ def init_pipeline(pretrained_model_name_or_path, revision, variant, placeholder_
     style_clip = style_clip.eval()
     style_clip = style_clip.to(device)
 
+    if not skip_background:
+        num_parts = num_parts + 1
     if isinstance(clip_hidden, str):
         clip_hidden = [int(a) for a in clip_hidden.split(",")]
     makeup_adapter = MakeupAdapter(
@@ -284,6 +288,7 @@ def init_pipeline(pretrained_model_name_or_path, revision, variant, placeholder_
         style_seq_len=256 * len(clip_hidden),
         num_parts=num_parts,
         num_heads_part=num_heads_part,
+        skip_background=skip_background,
         unet=unet,
         use_ipa=use_ipa,
         use_text_inv=use_text_inv
@@ -373,7 +378,7 @@ def main():
         attn_size = [64]
 
     pipeline = init_pipeline(args.pretrained_model_name_or_path, args.revision, args.variant,
-                             args.placeholder_token, args.num_parts, args.num_heads_part,
+                             args.placeholder_token, args.num_parts, args.num_heads_part, args.skip_background,
                              args.use_ipa, args.use_text_inv,
                              args.use_lora, args.use_ema,
                              args.style_clip_ckpt, args.use_clip_lora, args.clip_hidden,

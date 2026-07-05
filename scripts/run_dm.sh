@@ -60,9 +60,10 @@ GEO_MODE="3d"
 
 CLIP_LORA=1
 #CLIP_HIDDEN="3,6,12,24"
-CLIP_HIDDEN="3,12,24"
+CLIP_HIDDEN="6,12,24"
 
 NUM_PARTS=4
+SKIP_BG=0
 USE_IPA=1
 USE_TEXT_INV=0
 SD_LORA=1
@@ -101,13 +102,14 @@ export MASTER_ADDR=$master_addr
 #  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
 #  --dataset_name="makeup" --train_data_dir=${TRAIN_DATA_ROOT} \
 #  --resolution=512 --dataloader_num_workers=8 \
-#  --placeholder_token=${PLACEHOLDER} --use_templates --geo_mode=${GEO_MODE} \
-#  --vector_shuffle --swap_pair_rate=0. --drop_p_text=0.05 --drop_p_style=0.05 --drop_p_all=0.05 \
-#  --attn_size="32,64" --num_parts=${NUM_PARTS} --skip_background \
+#  --placeholder_token=${PLACEHOLDER} --vector_shuffle \
+#  --use_templates --swap_pair_rate=0. --drop_p_text=0.05 --drop_p_style=0.05 --drop_p_all=0.05 \
+#  --attn_size="32,64" --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
 #  --use_ipa=0 --use_text_inv=0 \
 #  --use_lora=0 --rank=${SD_LORA_RANK} --lora_alpha=${SD_LORA_ALPHA} \
 #  --use_ema=0 \
 #  --weight_mask=0.0 --weight_attn=0.0 \
+#  --geo_mode=${GEO_MODE} \
 #  --train_batch_size=8 --gradient_accumulation_steps=1 \
 #  --max_train_steps=50000 --learning_rate=1e-5 --lr_adapter=1e-5 --adam_weight_decay=0.01 --lr_scheduler="constant" --lr_warmup_steps=0 \
 #  --checkpointing_steps=10000 --checkpoints_total_limit=1 \
@@ -126,13 +128,14 @@ srun -u --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MAS
   --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
   --dataset_name="makeup" --train_data_dir=${TRAIN_DATA_ROOT} \
   --resolution=512 --dataloader_num_workers=8 \
-  --placeholder_token=${PLACEHOLDER} --geo_mode=${GEO_MODE} \
-  --vector_shuffle --swap_pair_rate=0. --drop_p_text=0.05 --drop_p_style=0.05 --drop_p_all=0.05 \
-  --attn_size="32,64" --num_parts=${NUM_PARTS} --skip_background \
+  --placeholder_token=${PLACEHOLDER} --vector_shuffle \
+  --swap_pair_rate=0. --drop_p_text=0.05 --drop_p_style=0.05 --drop_p_all=0.05 \
+  --attn_size="32,64" --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
   --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} \
   --use_lora=${SD_LORA} --rank=${SD_LORA_RANK} --lora_alpha=${SD_LORA_ALPHA} \
   --use_ema=${USE_EMA} \
   --weight_mask=0.9 --weight_attn=0.1 \
+  --geo_mode=${GEO_MODE} \
   --train_batch_size=8 --gradient_accumulation_steps=1 \
   --max_train_steps=100000 --learning_rate=1e-5 --lr_adapter=1e-5 --adam_weight_decay=0.01 --lr_scheduler="constant" --lr_warmup_steps=0 \
   --checkpointing_steps=10000 --checkpoints_total_limit=5 \
@@ -153,10 +156,11 @@ srun -u --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MAS
 #    --pretrained_model_name_or_path=${DM_CKPT} \
 #    --ckpt_dir=${OUT_DIR} \
 #    --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
-#    --placeholder_token=${PLACEHOLDER} --geo_mode=${GEO_MODE} \
+#    --placeholder_token=${PLACEHOLDER} \
 #    --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} \
-#    --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
-#    --use_ema=${USE_EMA} \
+#    --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
+#    --use_lora=${SD_LORA} --use_ema=${USE_EMA} \
+#    --geo_mode=${GEO_MODE} \
 #    --data_root=${VAL_DATA_ROOT} --anno_path=${VAL_ANNO_PATH} --validation_prompt="${PROMPT}" \
 #    --detect_face=${DET_FACE} \
 #    --out_dir="./result" \
@@ -169,10 +173,11 @@ srun -u --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MAS
 #  --pretrained_model_name_or_path=${DM_CKPT} \
 #  --ckpt_dir=${OUT_DIR} \
 #  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
-#  --placeholder_token=${PLACEHOLDER} --geo_mode=${GEO_MODE} \
+#  --placeholder_token=${PLACEHOLDER} \
 #  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} \
-#  --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
-#  --use_ema=${USE_EMA} \
+#  --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
+#  --use_lora=${SD_LORA} --use_ema=${USE_EMA} \
+#  --geo_mode=${GEO_MODE} \
 #  --data_id_path="${BENCHMARK_ROOT}/custom/id/1698.png" \
 #  --data_makeup_path="${BENCHMARK_ROOT}/custom/makeup/2407.png" \
 #  --validation_prompt="${PROMPT}" \
@@ -182,33 +187,16 @@ srun -u --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MAS
 #  --out_dir="./result"
 
 
-# region
-#python -u ./test_dm.py \
-#  --pretrained_model_name_or_path=${DM_CKPT} \
-#  --ckpt_dir=${OUT_DIR} \
-#  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
-#  --placeholder_token=${PLACEHOLDER} --geo_mode=${GEO_MODE} \
-#  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} \
-#  --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
-#  --use_ema=${USE_EMA} \
-#  --data_id_path="${BENCHMARK_ROOT}/custom/id/00059.png" \
-#  --data_makeup_path="${BENCHMARK_ROOT}/custom/makeup/1878.png" \
-#  --validation_prompt="${PROMPT}" \
-#  --detect_face=1 --exp_ratio=-1 --use_square=1 \
-#  --token_idx="0" \
-#  --vis_all=1 \
-#  --out_dir="./result"
-
-
 # region face, eyes, mouth
 #python -u ./test_dm.py \
 #  --pretrained_model_name_or_path=${DM_CKPT} \
 #  --ckpt_dir=${OUT_DIR} \
 #  --style_clip_ckpt=${STYLE_CLIP_CKPT} --use_clip_lora=${CLIP_LORA} --clip_hidden=${CLIP_HIDDEN} \
-#  --placeholder_token=${PLACEHOLDER} --geo_mode=${GEO_MODE} \
+#  --placeholder_token=${PLACEHOLDER} \
 #  --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} \
-#  --num_parts=${NUM_PARTS} --use_lora=${SD_LORA} \
-#  --use_ema=${USE_EMA} \
+#  --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
+#  --use_lora=${SD_LORA} --use_ema=${USE_EMA} \
+#  --geo_mode=${GEO_MODE} \
 #  --data_id_path="${BENCHMARK_ROOT}/custom/id/stablemakeup-2.jpg" \
 #  --data_makeup_path="${BENCHMARK_ROOT}/custom/makeup/vRX31.png;${BENCHMARK_ROOT}/custom/makeup/157.png;${BENCHMARK_ROOT}/custom/makeup/126.png" \
 #  --validation_prompt="${PROMPT}" \

@@ -823,25 +823,42 @@ class MakeupSDPipeline(StableDiffusionControlNetInpaintPipeline):
                                                                  self.unet.dtype,
                                                                  self.do_classifier_free_guidance)
 
+            num_parts = self.makeup_adapter.num_parts
             num_heads_part = self.makeup_adapter.num_heads_part
+            if self.makeup_adapter.skip_background:
+                offset = 0
+                ipa_attn_mask = None
+            else:
+                offset = 1
+
+                ipa_attn_mask = torch.zeros(num_parts * num_heads_part)
+                ipa_attn_mask[:num_heads_part] = 1
+                ipa_attn_mask = ipa_attn_mask.reshape(1, 1, -1)
+                ipa_attn_mask = ipa_attn_mask.repeat(batch_size * num_images_per_prompt, 1, 1)
+                ipa_attn_mask = ipa_attn_mask.to(device=device, dtype=torch.bool)
+
+                if self.do_classifier_free_guidance:
+                    ipa_attn_mask = ipa_attn_mask.repeat(2, 1, 1)
+
             if len(image_makeup_list) == 1:
                 prompt_image_emb = prompt_image_emb_list[0]
 
                 if token_idx is not None:
                     prompt_image_emb_tmp = prompt_image_emb_id.clone()
                     for idx in token_idx:
+                        idx += offset
                         prompt_image_emb_tmp[:, idx*num_heads_part:(idx+1)*num_heads_part] = prompt_image_emb[:, idx*num_heads_part:(idx+1)*num_heads_part]
                     prompt_image_emb = prompt_image_emb_tmp
             else:
                 prompt_image_emb = prompt_image_emb_id.clone()
                 # face, eyes, nose, mouth
-                prompt_image_emb[:, 0*num_heads_part:1*num_heads_part] = prompt_image_emb_list[0][:, 0*num_heads_part:1*num_heads_part]
-                prompt_image_emb[:, 1*num_heads_part:2*num_heads_part] = prompt_image_emb_list[1][:, 1*num_heads_part:2*num_heads_part]
-                prompt_image_emb[:, 2*num_heads_part:3*num_heads_part] = prompt_image_emb_list[0][:, 2*num_heads_part:3*num_heads_part]
-                prompt_image_emb[:, 3*num_heads_part:4*num_heads_part] = prompt_image_emb_list[2][:, 3*num_heads_part:4*num_heads_part]
+                prompt_image_emb[:, (0+offset)*num_heads_part:(1+offset)*num_heads_part] = prompt_image_emb_list[0][:, (0+offset)*num_heads_part:(1+offset)*num_heads_part]
+                prompt_image_emb[:, (1+offset)*num_heads_part:(2+offset)*num_heads_part] = prompt_image_emb_list[1][:, (1+offset)*num_heads_part:(2+offset)*num_heads_part]
+                prompt_image_emb[:, (2+offset)*num_heads_part:(3+offset)*num_heads_part] = prompt_image_emb_list[0][:, (2+offset)*num_heads_part:(3+offset)*num_heads_part]
+                prompt_image_emb[:, (3+offset)*num_heads_part:(4+offset)*num_heads_part] = prompt_image_emb_list[2][:, (3+offset)*num_heads_part:(4+offset)*num_heads_part]
 
             # encoder_hidden_states = torch.cat([prompt_embeds, prompt_image_emb], dim=1)
-            encoder_hidden_states = [prompt_embeds, prompt_image_emb]
+            encoder_hidden_states = [prompt_embeds, prompt_image_emb, ipa_attn_mask]
 
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
             image_embeds = self.prepare_ip_adapter_image_embeds(

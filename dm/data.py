@@ -144,7 +144,7 @@ def random_crop_arr(pil_image, image_size, min_crop_frac=0.8, max_crop_frac=1.0,
 class MakeupDataset(Dataset):
     def __init__(self, data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_prob, skip_background, num_parts, geo_mode):
+                 swap_pair_rate, drop_prob, skip_background, geo_mode):
         self.data_root = data_root
         self.resolution = resolution
         self.random_crop = not center_crop
@@ -161,7 +161,6 @@ class MakeupDataset(Dataset):
         self.drop_p_style = drop_prob[1]
         self.drop_p_all = drop_prob[2]
         self.skip_background = skip_background
-        self.num_parts = num_parts
         self.geo_mode = geo_mode
 
         self.label_names = ['background', 'face', 'rb', 'lb', 're', 'le', 'nose', 'ulip', 'imouth', 'llip', 'hair']
@@ -355,7 +354,6 @@ class MakeupDataset(Dataset):
         if self.skip_background:
             seg_mask = seg_mask[1:]
         token_idx = (seg_mask.sum(dim=(1, 2)) >= 1).nonzero(as_tuple=True)[0]
-        assert seg_mask.shape[0] == self.num_parts
         assert img_id_pil.size[1] == seg_mask.shape[1] and img_id_pil.size[0] == seg_mask.shape[2], f"{id_path}, \t, {makeup_path}"
 
         # face_emb = np.load(os.path.join(data_root, "face_emb", data_folder, "{}.npy".format(data_file_name)))
@@ -460,10 +458,10 @@ def collate_fn(examples):
 class SyntheticDataset(MakeupDataset):
     def __init__(self, data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_prob, skip_background, num_parts, geo_mode):
+                 swap_pair_rate, drop_prob, skip_background, geo_mode):
         super().__init__(data_root, resolution, center_crop, random_flip,
                  tokenizer, base_prompt, use_templates, vector_shuffle, drop_tokens, drop_tokens_rate,
-                 swap_pair_rate, drop_prob, skip_background, num_parts, geo_mode)
+                 swap_pair_rate, drop_prob, skip_background, geo_mode)
 
         self.image = PIL.Image.new('RGB', (self.resolution, self.resolution))
         self.dataset_size = 100
@@ -474,7 +472,8 @@ class SyntheticDataset(MakeupDataset):
         img_pose_pil = self.image
         img_warp_pil = self.image
 
-        seg_mask = (torch.randn(self.num_parts, self.resolution, self.resolution) > 0).float()
+        num_parts = 4 if self.skip_background else 5
+        seg_mask = (torch.randn(num_parts, self.resolution, self.resolution) > 0).float()
         face_mask = (torch.randn(self.resolution, self.resolution) > 0).float()
         exp_mask = (torch.randn(self.resolution, self.resolution) > 0).float()
         face_emb = torch.randn(1, 512)
@@ -493,7 +492,7 @@ class SyntheticDataset(MakeupDataset):
 
         img_style = self.transforms_style(img_warp_pil)
 
-        token_idx = torch.arange(self.num_parts)
+        token_idx = torch.arange(num_parts)
         text_input_ids = self.preprocess_caption(token_idx.tolist(), False)
 
         return {
@@ -530,7 +529,6 @@ if __name__ == '__main__':
     data_dir = "./output/makeup_pair_ffhq"
     # data_dir = "./output/makeup_pair_qwen"
     model_id = "../../pretrain/stable-diffusion-2-1-base"
-    num_parts = 4
     tokenizer = MultiTokenCLIPTokenizer.from_pretrained(
         model_id, subfolder="tokenizer",
     )
@@ -542,7 +540,7 @@ if __name__ == '__main__':
     dataset = MakeupDataset(data_dir, 512, center_crop=False, random_flip=True,
                             tokenizer=tokenizer, base_prompt=base_prompt, use_templates=True, vector_shuffle=True, drop_tokens=False, drop_tokens_rate=0.,
                             swap_pair_rate=0.1, drop_prob=[0.05, 0.05, 0.05],
-                            skip_background=True, num_parts=num_parts, geo_mode="3d")
+                            skip_background=True, geo_mode="3d")
 
     img = PIL.Image.open("./assets/images/00128-img_swap.png")
     img_style = dataset.deform(image=np.array(img))
