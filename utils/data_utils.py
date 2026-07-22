@@ -546,7 +546,7 @@ def get_makeup_list(data_path):
 
 
 def merge_anno(data_dir, split=None):
-    anno_path_list = glob.glob(data_dir + "/*.csv")
+    anno_path_list = glob.glob(os.path.join(data_dir, "*.csv"))
     anno_path_list = sorted(anno_path_list)
     name = os.path.basename(anno_path_list[0]).split("-")[0]
 

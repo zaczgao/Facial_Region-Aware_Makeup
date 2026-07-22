@@ -161,7 +161,6 @@ class CustomCrossAttnProcessor(nn.Module):
         attention_probs = attention_scores.softmax(dim=-1)
 
         attention_probs = attention_probs.to(dtype)
-        attn_score_raw = attn_score_raw.to(dtype)
 
         return attention_probs, attn_score_raw
 

@@ -282,7 +282,7 @@ def create_ffhq_id_list(data_id_path, data_face_dir, num_id, use_prev=True):
     # 1024x1024
     face_analyser = FaceAnalyser(det_thresh=0.5, min_h=500, min_w=500, align=False, td_mode="")
 
-    img_path_list = glob.glob(data_face_dir + "/*/*/*.png")
+    img_path_list = glob.glob(os.path.join(data_face_dir, "**", "*.png"), recursive=True)
     img_path_list = sorted(img_path_list)
 
     # with open(os.path.join(data_face_dir, "ffhq-dataset-v2.json"), "r", encoding="utf-8") as f:
@@ -368,12 +368,12 @@ class FaceIDFilter():
 
         prompt = """
         You are an expert in analyzing face images and assessing image quality. Two face images will be provided:
-        1. The first image contains little or no makeup.
-        2. The second image is the edited version of the first image, where makeup is applied.
+        1. Image 1: contains little or no makeup.
+        2. Image 2: edited version of Image 1, where makeup is applied.
         Complete the following tasks.
         ---
         # Task 1: Evaluate image quality
-        1. Assess whether the second image is a realistic photograph.
+        1. Assess whether Image 2 is a realistic photograph.
         2. Consider AI artifacts, anatomy, lighting and texture. Ignore makeup.
         3. Provide a binary score:
             - 0 = not a realistic photograph

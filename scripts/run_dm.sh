@@ -62,6 +62,7 @@ CLIP_LORA=1
 #CLIP_HIDDEN="3,6,12,24"
 CLIP_HIDDEN="6,12,24"
 
+ATTN_SIZE="32,64"
 NUM_PARTS=4
 SKIP_BG=0
 USE_IPA=1
@@ -104,7 +105,7 @@ export MASTER_ADDR=$master_addr
 #  --resolution=512 --dataloader_num_workers=8 \
 #  --placeholder_token=${PLACEHOLDER} --vector_shuffle \
 #  --use_templates --swap_pair_rate=0. --drop_p_text=0.05 --drop_p_style=0.05 --drop_p_all=0.05 \
-#  --attn_size="32,64" --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
+#  --attn_size=${ATTN_SIZE} --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
 #  --use_ipa=0 --use_text_inv=0 \
 #  --use_lora=0 --rank=${SD_LORA_RANK} --lora_alpha=${SD_LORA_ALPHA} \
 #  --use_ema=0 \
@@ -130,7 +131,7 @@ srun -u --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MAS
   --resolution=512 --dataloader_num_workers=8 \
   --placeholder_token=${PLACEHOLDER} --vector_shuffle \
   --swap_pair_rate=0. --drop_p_text=0.05 --drop_p_style=0.05 --drop_p_all=0.05 \
-  --attn_size="32,64" --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
+  --attn_size=${ATTN_SIZE} --num_parts=${NUM_PARTS} --skip_background=${SKIP_BG} \
   --use_ipa=${USE_IPA} --use_text_inv=${USE_TEXT_INV} \
   --use_lora=${SD_LORA} --rank=${SD_LORA_RANK} --lora_alpha=${SD_LORA_ALPHA} \
   --use_ema=${USE_EMA} \

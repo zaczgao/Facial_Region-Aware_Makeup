@@ -41,7 +41,7 @@ def prep_face(args):
     face_parser = FaceParser()
     tps_deform = TPSDeform()
     
-    img_path_list = glob.glob(args.data_dir + "/*.png") + glob.glob(args.data_dir + "/*/*.png")
+    img_path_list = glob.glob(os.path.join(args.data_dir, "**", "*.png"), recursive=True)
     img_path_list = sorted(img_path_list)
     print("Found {} face images at {}".format(len(img_path_list), args.data_dir))
 

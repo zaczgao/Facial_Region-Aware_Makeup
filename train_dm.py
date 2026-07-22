@@ -25,6 +25,7 @@ from contextlib import nullcontext
 from pathlib import Path
 import itertools
 from tqdm.auto import tqdm
+import secrets
 import PIL.Image
 
 import datasets
@@ -38,7 +39,7 @@ from torchvision import transforms
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration, set_seed
+from accelerate.utils import ProjectConfiguration, set_seed, broadcast_object_list
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from peft import LoraConfig
@@ -584,6 +585,11 @@ def main():
         diffusers.utils.logging.set_verbosity_error()
 
     # If passed along, set the training seed now.
+    seed = [args.seed if accelerator.is_main_process else None]
+    if accelerator.is_main_process and seed[0] is None:
+        seed[0] = secrets.randbelow(2**31 - accelerator.num_processes)
+    args.seed = broadcast_object_list(seed, from_process=0)[0]
+
     if args.seed is not None:
         set_seed(args.seed)
 
@@ -683,6 +689,8 @@ def main():
         adapter_ema_parameters = [p for n, p in makeup_adapter.named_parameters() if p.requires_grad]
         ema_adapter = EMAModuleWrapper(adapter_ema_parameters, adapter_ema_names,
                                     decay=ema_decay, update_step_interval=1, device=accelerator.device)
+
+    set_seed(args.seed, device_specific=True)
 
     # unet.down_blocks[1].attentions[0].transformer_blocks
     if accelerator.is_main_process:
@@ -998,8 +1006,9 @@ def main():
         train_loss_attn = 0.0
         for step, batch in enumerate(train_dataloader):
             assert num_parts == batch["seg_mask"].shape[1]
+            models_to_accumulate = [unet, makeup_adapter]
 
-            with accelerator.accumulate(unet, makeup_adapter):
+            with accelerator.accumulate(*models_to_accumulate):
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor

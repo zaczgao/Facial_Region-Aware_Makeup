@@ -19,7 +19,7 @@ import imgaug.augmenters as iaa
 import glob
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 from torchvision.transforms.v2 import GaussianNoise
@@ -172,6 +172,7 @@ class MakeupDataset(Dataset):
             ['ulip', 'llip']
         ]
 
+        self._albumentations_seed_key = None
         additional_targets = {'image_id': 'image', 'image_pose': 'masks', 'seg_mask': 'masks',
                               'face_mask': 'mask', 'exp_mask': 'mask'}
         flip_prob = 0.5 if random_flip else 0.0
@@ -234,7 +235,7 @@ class MakeupDataset(Dataset):
         instances = []
         for directory in data_dir:
             img_id_root = os.path.join(directory, "id")
-            img_id_path_list = glob.glob(img_id_root + "/*.png") + glob.glob(img_id_root + "/*/*.png")
+            img_id_path_list = glob.glob(os.path.join(img_id_root, "**", "*.png"), recursive=True)
             img_id_path_list = sorted(img_id_path_list)
 
             for img_id_path in img_id_path_list:
@@ -279,13 +280,34 @@ class MakeupDataset(Dataset):
 
         return text_input_ids
 
+    def _seed_augmentations_for_worker(self):
+        worker_info = get_worker_info()
+        if worker_info is not None:
+            worker_seed = worker_info.seed
+        else:
+            worker_seed = torch.initial_seed()
+
+        rank = int(os.environ.get("RANK", 0))
+        seed_key = (worker_seed, rank)
+
+        if self._albumentations_seed_key == seed_key:
+            return
+
+        seed = np.random.SeedSequence(seed_key).generate_state(
+            1, dtype=np.uint32
+        )
+
+        self.transforms_random.set_random_seed(int(seed[0]))
+        self._albumentations_seed_key = seed_key
+
     def preprocess_image(self, img_makeup: np.ndarray, img_id: np.ndarray, img_pose: np.ndarray, seg_mask, face_mask, exp_mask):
-        additional_input = {'image_id': img_id,
-                            'image_pose': img_pose.transpose(2, 0, 1),
-                            'seg_mask': seg_mask.cpu().numpy().astype(np.uint8),
-                            'face_mask': face_mask.cpu().numpy().astype(np.uint8),
-                            'exp_mask': exp_mask.cpu().numpy().astype(np.uint8)
-                            }
+        additional_input = {
+            'image_id': img_id,
+            'image_pose': img_pose.transpose(2, 0, 1),
+            'seg_mask': seg_mask.cpu().numpy().astype(np.uint8),
+            'face_mask': face_mask.cpu().numpy().astype(np.uint8),
+            'exp_mask': exp_mask.cpu().numpy().astype(np.uint8)
+        }
 
         augmented = self.transforms_random(image=img_makeup, **additional_input)
 
@@ -299,6 +321,8 @@ class MakeupDataset(Dataset):
         return img_makeup_aug, img_id_aug, img_pose_aug, seg_mask_aug, face_mask_aug, exp_mask_aug
 
     def prep_mask(self, seg_pred, label_names, label_group):
+        assert torch.unique(seg_pred).max() <= len(label_names)
+        
         H, W = seg_pred.shape
 
         seg_mask_group = torch.zeros((len(label_group), H, W), device=seg_pred.device)
@@ -323,10 +347,11 @@ class MakeupDataset(Dataset):
         return seg_mask_group, face_mask, exp_mask
 
     def __getitem__(self, index):
+        self._seed_augmentations_for_worker()
+
         id_path, makeup_path = self.samples[index]
         img_id_pil = PIL.Image.open(id_path).convert("RGB")
         img_makeup_pil = PIL.Image.open(makeup_path).convert("RGB")
-        assert img_id_pil.size == img_makeup_pil.size
 
         if random.random() < self.swap_pair_rate:
             img_id_pil_tmp = img_id_pil
@@ -344,7 +369,6 @@ class MakeupDataset(Dataset):
         elif self.geo_mode == "keypoint":
             pose_path = os.path.join(data_root, "pose", data_folder, "{}.png".format(data_file_name))
         img_pose_pil = PIL.Image.open(pose_path).convert("RGB")
-        assert img_id_pil.size == img_pose_pil.size
 
         # lms68 = np.load(os.path.join(data_root, "lms68", data_folder, "{}.npy".format(data_file_name)))
 
@@ -354,7 +378,10 @@ class MakeupDataset(Dataset):
         if self.skip_background:
             seg_mask = seg_mask[1:]
         token_idx = (seg_mask.sum(dim=(1, 2)) >= 1).nonzero(as_tuple=True)[0]
-        assert img_id_pil.size[1] == seg_mask.shape[1] and img_id_pil.size[0] == seg_mask.shape[2], f"{id_path}, \t, {makeup_path}"
+
+        if img_id_pil.size != img_makeup_pil.size or img_id_pil.size != img_pose_pil.size or \
+                img_id_pil.size[1] != seg_mask.shape[1] or img_id_pil.size[0] != seg_mask.shape[2]:
+            raise ValueError(f"Mismatch size for {id_path}, {makeup_path}")
 
         # face_emb = np.load(os.path.join(data_root, "face_emb", data_folder, "{}.npy".format(data_file_name)))
         # face_emb = torch.from_numpy(face_emb).reshape([1, -1])
