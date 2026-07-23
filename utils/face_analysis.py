@@ -297,7 +297,22 @@ def convert_insightface2facer(all_face_info):
 
 class FaceAnalyser():
     def __init__(self, det_thresh=0.5, min_h=150, min_w=150, exp_ratio=0.25, use_square=True,
-                 align=False, image_size=256, det_mode="insightface", td_mode=""):
+                 align=False, image_size=256, det_mode="insightface", td_mode="", device_id=0):
+
+        if torch.cuda.is_available():
+            device = f"cuda:{device_id}"
+            providers = [
+                (
+                    "CUDAExecutionProvider",
+                    {"device_id": device_id},
+                )
+            ]
+            ctx_id = device_id
+        else:
+            device = "cpu"
+            providers = ["CPUExecutionProvider"]
+            ctx_id = -1
+        self.device = device
 
         self.det_thresh = det_thresh
         self.min_h = min_h
@@ -309,13 +324,15 @@ class FaceAnalyser():
         self.det_mode = det_mode
         self.td_mode = td_mode
 
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.device = device
-
-        model = FaceAnalysis(name='buffalo_l', root="./checkpoints", providers=['CUDAExecutionProvider'],
+        model = FaceAnalysis(name='buffalo_l', root="./checkpoints", providers=providers,
                              allowed_modules=['detection', 'landmark_3d_68', 'genderage'])
-        model.prepare(ctx_id=0, det_thresh=det_thresh, det_size=(640, 640))  # ctx_id=-1 for CPU, 0 for GPU
+        model.prepare(ctx_id=ctx_id, det_thresh=det_thresh, det_size=(640, 640))  # ctx_id=-1 for CPU, 0 for GPU
         self.model = model
+
+        for task_name, component in model.models.items():
+            session = getattr(component, "session", None)
+            active_providers = session.get_providers()
+            assert active_providers[0] == "CUDAExecutionProvider", f"active providers: {active_providers} for {task_name}"
 
         if det_mode == "yolo":
             model_yolo = YOLO('./checkpoints/yolov8l_100e.pt')
@@ -325,9 +342,9 @@ class FaceAnalyser():
         self.face_aligner = facer.face_aligner('farl/wflw/448', device=device)  # optional: "farl/ibug300w/448", "farl/wflw/448", "farl/aflw19/448"
 
         if td_mode == "flame":
-            self.model_3d = SMIRK()
+            self.model_3d = SMIRK(device=device)
         elif td_mode == "3ddfa":
-            self.model_3d = TDDFAV3()
+            self.model_3d = TDDFAV3(device=device)
 
     @torch.no_grad()
     def get_facer_lms(self, img, all_face_info):
@@ -547,8 +564,8 @@ def dilate_mask(mask, kernel_size=3, num_iter=4):
 
 
 class FaceParser():
-    def __init__(self, mode="lapa"):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(self, mode="lapa", device_id=0):
+        device = f"cuda:{device_id}" if torch.cuda.is_available() else "cpu"
         self.device = device
 
         self.mode = mode

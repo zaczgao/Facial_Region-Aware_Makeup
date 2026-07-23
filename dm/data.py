@@ -226,7 +226,7 @@ class MakeupDataset(Dataset):
         self.samples = self.make_dataset(data_root)
 
     def make_dataset(self, data_root):
-        root_sub_folder = os.listdir(data_root)
+        root_sub_folder = sorted(os.listdir(data_root))
         if "id" in root_sub_folder:
             data_dir = [data_root]
         else:
@@ -321,7 +321,7 @@ class MakeupDataset(Dataset):
         return img_makeup_aug, img_id_aug, img_pose_aug, seg_mask_aug, face_mask_aug, exp_mask_aug
 
     def prep_mask(self, seg_pred, label_names, label_group):
-        assert torch.unique(seg_pred).max() <= len(label_names)
+        assert torch.unique(seg_pred).max() < len(label_names)
         
         H, W = seg_pred.shape
 
