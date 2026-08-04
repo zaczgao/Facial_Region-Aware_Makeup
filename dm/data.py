@@ -171,6 +171,8 @@ class MakeupDataset(Dataset):
             ['nose'],
             ['ulip', 'llip']
         ]
+        self.label_bg = ['background', 'hair']
+        self.label_exp = ['rb', 'lb', 're', 'le', 'ulip', 'imouth', 'llip']
 
         self._albumentations_seed_key = None
         additional_targets = {'image_id': 'image', 'image_pose': 'masks', 'seg_mask': 'masks',
@@ -320,7 +322,7 @@ class MakeupDataset(Dataset):
 
         return img_makeup_aug, img_id_aug, img_pose_aug, seg_mask_aug, face_mask_aug, exp_mask_aug
 
-    def prep_mask(self, seg_pred, label_names, label_group):
+    def prep_mask(self, seg_pred, label_names, label_group, label_bg, label_exp):
         assert torch.unique(seg_pred).max() < len(label_names)
         
         H, W = seg_pred.shape
@@ -331,16 +333,14 @@ class MakeupDataset(Dataset):
                 idx = np.where(np.array(label_names) == label)[0][0]
                 seg_mask_group[group_idx] += (seg_pred == idx).float()
 
-        bg_label = ['background', 'hair']
         bg_mask = torch.zeros((H, W), device=seg_pred.device)
-        for label in bg_label:
+        for label in label_bg:
             idx = np.where(np.array(label_names) == label)[0][0]
             bg_mask += (seg_pred == idx).float()
         face_mask = 1. - bg_mask
 
-        exp_label = ['rb', 'lb', 're', 'le', 'ulip', 'imouth', 'llip']
         exp_mask = torch.zeros((H, W), device=seg_pred.device)
-        for label in exp_label:
+        for label in label_exp:
             idx = np.where(np.array(label_names) == label)[0][0]
             exp_mask += (seg_pred == idx).float()
 
@@ -374,7 +374,7 @@ class MakeupDataset(Dataset):
 
         mask_path = os.path.join(data_root, "mask", data_folder, "{}.pt".format(data_file_name))
         mask_dict = torch.load(mask_path, map_location="cpu")
-        seg_mask, face_mask, exp_mask = self.prep_mask(mask_dict["seg_pred"], self.label_names, self.label_group)
+        seg_mask, face_mask, exp_mask = self.prep_mask(mask_dict["seg_pred"], self.label_names, self.label_group, self.label_bg, self.label_exp)
         if self.skip_background:
             seg_mask = seg_mask[1:]
         token_idx = (seg_mask.sum(dim=(1, 2)) >= 1).nonzero(as_tuple=True)[0]

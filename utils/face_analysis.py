@@ -8,7 +8,7 @@ https://github.com/Yusepp/YOLOv8-Face
 pip install ultralytics
 
 facer Bug fix:
-\envs\torch-2\Lib\site-packages\facer\face_parsing\farl.py
+/envs/torch-2/Lib/site-packages/facer/face_parsing/farl.py
 /envs/torch-2/lib/python3.10/site-packages/facer/face_parsing/farl.py
 line148: w_images, grid, inv_grid = self.warp_images(images, data)
 add: w_images = torch.clamp(w_images, max=1.)
@@ -84,26 +84,35 @@ def calc_iou(bbox1, bbox2):
     return inter_area / (union_area + 1e-7)
 
 
-def get_clean_mask(mask, min_size):
+def get_clean_mask(mask, min_pixels):
     """
-    :param mask: 0, 1 uint8
-    :param min_size: min size of the mask
+    :param mask: 0,1 binary mask
+    :param min_pixels: min number of pixels in the mask
     """
     mask = mask.astype(np.uint8)
 
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
 
     clean_mask = np.zeros_like(mask)
 
+    fg_areas = []
+    num_clean_component = 0
     for i in range(1, num_labels):  # skip background
         area = stats[i, cv2.CC_STAT_AREA]
+        fg_areas.append(area)
 
-        if area >= min_size:
+        if area >= min_pixels:
             clean_mask[labels == i] = 1
+            num_clean_component += 1
 
     outlier_mask = (mask.astype(np.bool_) & ~clean_mask.astype(np.bool_)).astype(np.uint8)
 
-    return clean_mask, outlier_mask
+    result = {
+        "fg_areas": fg_areas,
+        "num_clean_component": num_clean_component
+    }
+
+    return clean_mask, outlier_mask, result
 
 
 def get_patch(landmarks, color='lime', closed=False):
@@ -329,10 +338,11 @@ class FaceAnalyser():
         model.prepare(ctx_id=ctx_id, det_thresh=det_thresh, det_size=(640, 640))  # ctx_id=-1 for CPU, 0 for GPU
         self.model = model
 
-        for task_name, component in model.models.items():
-            session = getattr(component, "session", None)
-            active_providers = session.get_providers()
-            assert active_providers[0] == "CUDAExecutionProvider", f"active providers: {active_providers} for {task_name}"
+        if torch.cuda.is_available():
+            for task_name, component in model.models.items():
+                session = getattr(component, "session", None)
+                active_providers = session.get_providers()
+                assert active_providers[0] == "CUDAExecutionProvider", f"active providers: {active_providers} for {task_name}"
 
         if det_mode == "yolo":
             model_yolo = YOLO('./checkpoints/yolov8l_100e.pt')
@@ -357,8 +367,6 @@ class FaceAnalyser():
 
             for idx, info in enumerate(all_face_info):
                 info["landmark_98"] = faces["alignment"][idx].cpu().numpy()
-
-        torch.cuda.empty_cache()
 
         return all_face_info
 
@@ -416,20 +424,25 @@ class FaceAnalyser():
 
         try:
             self.get_facer_lms(img_bgr[:, :, ::-1].copy(), all_face_info)
-        except (torch.cuda.OutOfMemoryError, torch.AcceleratorError) as e:
-            msg = str(e).lower()
 
-            if (
-                    "out of memory" in msg
-                    or "cudaerrormemoryallocation" in msg
-                    or "memory allocation" in msg
-            ):
-                print("CUDA OOM caught:", e)
-                all_face_info = []
+        except RuntimeError as exc:
+            message = str(exc).lower()
 
-                import gc
-                gc.collect()
-                torch.cuda.empty_cache()
+            is_cuda_oom = (
+                    "cuda out of memory" in message
+                    or "cudaerrormemoryallocation" in message
+                    or "cuda error: out of memory" in message
+            )
+
+            if not is_cuda_oom:
+                raise  # Never hide unrelated RuntimeErrors.
+
+            print(f"CUDA OOM; skipping image: {exc}", flush=True)
+            all_face_info.clear()
+
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
 
         face_info = []
         is_small_face = False
@@ -610,8 +623,7 @@ class FaceParser():
         faces = self.face_parser(img_tensor, faces)
 
         label_names = faces['seg']['label_names']
-        for n1, n2 in zip(self.label_names, label_names):
-            assert n1 == n2
+        assert self.label_names == label_names
         seg_logits = faces['seg']['logits']
         seg_probs = seg_logits.softmax(dim=1)  # nfaces x nclasses x h x w
         n_classes = seg_probs.size(1)

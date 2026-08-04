@@ -1,5 +1,6 @@
 setuptools==80.10.2
 numpy==1.26.4
+opencv-contrib-python==4.11.0.86
 timm==0.9.16
 diffusers==0.38.0
 transformers==4.57.6
@@ -9,11 +10,11 @@ safetensors
 datasets==2.21.0
 huggingface_hub==0.34.4
 sentencepiece
-insightface
 onnx==1.19.1
 #--extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-11/pypi/simple/
 #onnxruntime-gpu==1.20.1
 onnxruntime-gpu==1.23.2
+insightface
 git+https://github.com/FacePerceiver/facer.git@main
 git+https://github.com/openai/CLIP.git
 #git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9
@@ -21,13 +22,11 @@ git+https://github.com/openai/CLIP.git
 # pip install chumpy==0.70 --no-build-isolation
 einops
 protobuf
-opencv-contrib-python==4.11.0.86
 tensorboard
 torch_tps
 fvcore
 albumentations
 imgaug
-timed-decorator
 torchmetrics
 pyiqa
 openai

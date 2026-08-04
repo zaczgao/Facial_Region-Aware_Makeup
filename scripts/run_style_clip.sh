@@ -12,8 +12,15 @@
 #SBATCH --mail-user=z.gao@qmul.ac.uk
 
 
-#SCRIPT_DIR=$(cd "$(dirname "$0")";pwd)
-#echo "Script directory ${SCRIPT_DIR}"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    WORK_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
+else
+    WORK_DIR="$(
+        cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &&
+        pwd -P
+    )" || exit 1
+fi
+echo "Work directory ${WORK_DIR}"
 NOW=$(date +"%Y%m%d_%H%M%S")
 
 
@@ -61,7 +68,7 @@ export MASTER_ADDR=$master_addr
 
 
 ## train encoder layer
-#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- \
+#torchrun --nproc_per_node=2 --master_port=$MASTER_PORT -- \
 #  ./train_style_clip.py \
 #  --train-data=${DATA_TRAIN} --train-anno=${ANNO_TRAIN} \
 #  --val-data=${DATA_VAL} --val-anno=${ANNO_VAL} \
@@ -79,7 +86,7 @@ export MASTER_ADDR=$master_addr
 #  2>&1 | tee ./style-clip-train-${NOW}.txt
 #
 ## test on synthetic data
-#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- \
+#torchrun --nproc_per_node=2 --master_port=$MASTER_PORT -- \
 #  ./train_style_clip.py \
 #  --val-data=${VAL_DATA_VAL} --val-anno=${VAL_ANNO_VAL} \
 #  --memory-data=${VAL_DATA_TRAIN} --memory-anno=${VAL_ANNO_TRAIN} \
@@ -95,7 +102,7 @@ export MASTER_ADDR=$master_addr
 
 
 # train lora
-#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- \
+#torchrun --nproc_per_node=2 --master_port=$MASTER_PORT -- \
 srun -u --cpu_bind=v --accel-bind=gn python -u \
   ./train_style_clip.py \
   --train-data=${DATA_TRAIN} --train-anno=${ANNO_TRAIN} \
@@ -114,7 +121,7 @@ srun -u --cpu_bind=v --accel-bind=gn python -u \
   2>&1 | tee ./style-clip-train-${NOW}.txt
 
 # test on synthetic data
-#torchrun --nproc_per_node 2 --master_port=$MASTER_PORT -- \
+#torchrun --nproc_per_node=2 --master_port=$MASTER_PORT -- \
 srun -u --cpu_bind=v --accel-bind=gn python -u \
   ./train_style_clip.py \
   --val-data=${VAL_DATA_VAL} --val-anno=${VAL_ANNO_VAL} \

@@ -28,7 +28,6 @@ SCRIPT_DIR = os.path.dirname(abspath)
 sys.path.append(os.path.dirname(SCRIPT_DIR))
 
 from utils.face_analysis import FaceAnalyser, FaceParser, crop_bbox
-from utils.tps import TPSDeform
 from utils.vis_utils import show_result
 
 
@@ -39,7 +38,6 @@ def prep_face(args):
                                  exp_ratio=args.exp_ratio, use_square=args.use_square,
                                  align=args.align, image_size=args.image_size, td_mode="3ddfa")
     face_parser = FaceParser()
-    tps_deform = TPSDeform()
     
     img_path_list = glob.glob(os.path.join(args.data_dir, "**", "*.png"), recursive=True)
     img_path_list = sorted(img_path_list)
@@ -90,11 +88,6 @@ def prep_face(args):
                         os.makedirs(sub_out_dir_face, exist_ok=True)
                         sub_out_file = os.path.join(sub_out_dir_face, sub_img_file)
                         cv2.imwrite(sub_out_file, sub_img_face)
-
-            # img_warped = tps_deform(PIL.Image.fromarray(img_bgr[:, :, ::-1]),
-            #                                 face_info[pick_idx]["landmark_3d_68"][:, :2], verbose=verbose)
-            # img_face_warped = tps_deform(PIL.Image.fromarray(face_info[pick_idx]["face"][:, :, ::-1]),
-            #                                      face_info[pick_idx]["landmark_68_face"][:, :2], verbose=verbose)
 
             # lms68
             out_dir_lms68 = os.path.join(args.out_dir, "lms68", relative_path)

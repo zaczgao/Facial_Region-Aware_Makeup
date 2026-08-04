@@ -13,8 +13,15 @@
 # ~/miniforge3/bin/conda init bash
 # conda create -n torch-2 python=3.10
 
-#SCRIPT_DIR=$(cd "$(dirname "$0")";pwd)
-#echo "Script directory ${SCRIPT_DIR}"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    WORK_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
+else
+    WORK_DIR="$(
+        cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &&
+        pwd -P
+    )" || exit 1
+fi
+echo "Work directory ${WORK_DIR}"
 NOW=$(date +"%Y%m%d_%H%M%S")
 
 source ~/.bashrc
@@ -149,7 +156,7 @@ srun -u --cpu_bind=v --accel-bind=gn accelerate launch --main_process_port=${MAS
 
 
 #for i in "${!VAL_DATA_ROOT_LIST[@]}"; do
-#  VAL_DATA_ROOT="${VAL_DATA_ROOT_LIST[i]}"
+#  VAL_DATA_ROOT="${VAL_DATA_ROOT_LIST[$i]}"
 #  VAL_ANNO_PATH="${VAL_DATA_ROOT}/pair.txt"
 #  echo "Running: ${VAL_DATA_ROOT}"
 #

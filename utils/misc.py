@@ -9,6 +9,7 @@ __author__ = "GZ"
 
 import os
 import sys
+import glob
 import random
 import numpy as np
 import gc
@@ -29,23 +30,37 @@ SCRIPT_DIR = os.path.dirname(abspath)
 from utils.vis_utils import show_result
 
 
-IMG_EXTENSIONS = [
-    '.jpg', '.JPG', '.jpeg', '.JPEG',
-    '.png', '.PNG', '.ppm', '.PPM', '.bmp', '.BMP',
-]
+IMG_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"
+}
 
 
-def is_image_file(filename):
-    return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
+def is_image_file(file):
+    return os.path.splitext(file)[1].lower() in IMG_EXTENSIONS
+
+
+def find_all_image(data_dir):
+    img_path_list = []
+
+    for file in glob.glob(os.path.join(data_dir, "**", "*"), recursive=True):
+        if os.path.isfile(file) and is_image_file(file):
+            img_path_list.append(file)
+
+    return img_path_list
 
 
 def load_image(image_path, height=None, width=None, interpolate=PIL.Image.Resampling.LANCZOS, mode="RGB"):
-    if type(image_path) is str:
+    if isinstance(image_path, str):
         image = PIL.Image.open(image_path).convert(mode)
-        if height is not None:
-            image = image.resize((width, height), resample=interpolate)
+    elif isinstance(image_path, PIL.Image.Image):
+        image = image_path.convert(mode)
     else:
-        image = image_path
+        raise TypeError(f"Unsupported image input: {type(image_path)!r}")
+
+    if height is not None or width is not None:
+        if height is None or width is None:
+            raise ValueError("height and width must be provided together")
+        image = image.resize((width, height), resample=interpolate)
 
     return image
 
